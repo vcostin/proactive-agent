@@ -12,3 +12,9 @@ binaries/*
 
 # Local DB data
 data/
+
+# Machine-local cargo config (contains hardcoded protoc path)
+src-tauri/.cargo/config.toml
+
+# Claude local settings
+.claude/
