@@ -288,7 +288,9 @@ proactive-agent/
 
 ## Implementation Phases
 
-Each phase is a discrete git commit. All code must be real types, real imports, real structure — not pseudocode. Stubs are acceptable where logic is non-trivial, but types and signatures must be correct and `cargo check` must pass at the end of every Rust phase.
+This is the architecture document. Each phase is a discrete git commit. Implement one phase at a time — do not start the next phase until the current one is confirmed working.
+
+All code must be real types, real imports, real structure — not pseudocode. Stubs are acceptable where logic is non-trivial, but types and signatures must be correct and `cargo check` must pass at the end of every Rust phase.
 
 ### Phase 1 — Project scaffold + Rust core
 *Commit: `feat: phase 1 — project scaffold and Rust core`*
@@ -300,7 +302,7 @@ Each phase is a discrete git commit. All code must be real types, real imports, 
 - `src-tauri/src/orchestrator/adapter.rs` — `ModelAdapter` trait + `LlamaCppAdapter` against OpenAI-compatible REST; `ModelResponse` carries `tokens_per_sec`
 - `src-tauri/src/orchestrator/context.rs` — `AssembledContext` struct and `assemble()` signature
 
-Gate: `cargo check` passes.
+Gate: `cargo check` passes. **Do not proceed to Phase 2 until confirmed.**
 
 ### Phase 2 — Memory layer
 *Commit: `feat: phase 2 — memory layer (LanceDB, embeddings, episodic store)`*
@@ -309,7 +311,7 @@ Gate: `cargo check` passes.
 - `src-tauri/src/memory/episodic.rs` — `EpisodicStore`: process turn, embed, store, retrieve top-K by similarity
 - `src-tauri/src/memory/semantic.rs` — `SemanticStore`: background distillation stub, correct types and LanceDB schema
 
-Gate: `cargo check` passes; store/retrieve round-trip compiles.
+Gate: `cargo check` passes; store/retrieve round-trip compiles. **Do not proceed to Phase 3 until confirmed.**
 
 ### Phase 3 — Orchestration + Scheduler
 *Commit: `feat: phase 3 — orchestrator, scheduler, and Tauri commands`*
@@ -318,7 +320,7 @@ Gate: `cargo check` passes; store/retrieve round-trip compiles.
 - `src-tauri/src/orchestrator/scheduler.rs` — `ProactivityScheduler`: tokio interval loop, `Vec<DeferredMessage>` queue, fire via Tauri event
 - `src-tauri/src/commands.rs` — all Tauri commands: `send_message`, `swap_model`, `get_memories`, `get_system_status`, `get_last_context`, `fire_deferred_now`, `list_models`, `get_debug_events`
 
-Gate: `cargo check` passes; `send_message` wires end-to-end.
+Gate: `cargo check` passes; `send_message` wires end-to-end. **Do not proceed to Phase 4 until confirmed.**
 
 ### Phase 4 — Monitor + Audio
 *Commit: `feat: phase 4 — system monitor and audio pipeline`*
@@ -328,7 +330,7 @@ Gate: `cargo check` passes; `send_message` wires end-to-end.
 - `src-tauri/src/audio/stt.rs` — whisper.cpp HTTP client, returns transcript + latency
 - `src-tauri/src/audio/tts.rs` — Kokoro chunked synthesis client + cpal streaming playback
 
-Gate: `cargo check` passes.
+Gate: `cargo check` passes. **Do not proceed to Phase 5 until confirmed.**
 
 ### Phase 5 — React core
 *Commit: `feat: phase 5 — React shell, chat UI, model management`*
@@ -340,7 +342,7 @@ Gate: `cargo check` passes.
 - `src/components/chat/WaveformVisualizer.tsx`
 - `src/components/models/ModelPanel.tsx`, `ModelList.tsx`, `ModelSelector.tsx`
 
-Gate: app renders, Chat tab functional against a running llama.cpp instance.
+Gate: app renders, Chat tab functional against a running llama.cpp instance. **Do not proceed to Phase 6 until confirmed.**
 
 ### Phase 6 — Debug panel
 *Commit: `feat: phase 6 — debug panel and observability UI`*

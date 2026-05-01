@@ -1,0 +1,14 @@
+node_modules/
+dist/
+.DS_Store
+
+# Tauri
+src-tauri/target/
+src-tauri/gen/
+
+# Sidecar binaries are populated by build script, not committed
+binaries/*
+!binaries/.gitkeep
+
+# Local DB data
+data/
