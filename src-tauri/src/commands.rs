@@ -1,7 +1,11 @@
-use crate::monitor::{ModelInfo, SystemStatus};
+use std::collections::HashMap;
+
+use chrono::Utc;
+use tauri::{Emitter, State};
+
+use crate::monitor::{AudioState, MemoryStats, ModelInfo, SystemStatus};
 use crate::orchestrator::context::AssembledContext;
-use crate::SharedConfig;
-use tauri::State;
+use crate::{SharedConfig, SharedOrchestrator, SharedScheduler};
 
 type CmdResult<T> = Result<T, String>;
 
@@ -11,26 +15,42 @@ fn to_cmd_err(e: impl std::fmt::Display) -> String {
 
 // ── Chat ──────────────────────────────────────────────────────────────────────
 
-/// Main conversation entry point. Phase 3 wires this to the full orchestrator.
 #[tauri::command]
 pub async fn send_message(
-    _config: State<'_, SharedConfig>,
+    orchestrator: State<'_, SharedOrchestrator>,
+    scheduler: State<'_, SharedScheduler>,
+    app_handle: tauri::AppHandle,
     message: String,
 ) -> CmdResult<String> {
-    // EXTEND: Phase 3 — assemble context, call adapter, parse <defer> tags, store turn
-    let _ = message;
-    Err("orchestrator not yet wired (Phase 3)".to_string())
+    let mut lock = orchestrator.lock().await;
+    let orch = lock.as_mut().ok_or("Orchestrator not yet initialised")?;
+
+    let (response, deferred) =
+        orch.send_message(message).await.map_err(to_cmd_err)?;
+
+    if let Some(msg) = deferred {
+        scheduler.lock().await.add(msg.clone());
+        // Emit immediately so the debug scheduler panel updates without waiting
+        let _ = app_handle.emit("scheduler_updated", ());
+    }
+
+    Ok(response)
 }
 
-/// Hot-swap the loaded chat model. Does not affect the embedding model.
+/// Hot-swap the loaded chat model without restarting.
+/// Does not touch the embedding model.
 #[tauri::command]
 pub async fn swap_model(
     config: State<'_, SharedConfig>,
+    orchestrator: State<'_, SharedOrchestrator>,
     model_filename: String,
 ) -> CmdResult<()> {
-    // EXTEND: Phase 3 — signal llama-server to reload the model
-    let mut cfg = config.write().await;
-    cfg.chat_model = model_filename;
+    let port = config.read().await.llama_port;
+    let mut lock = orchestrator.lock().await;
+    if let Some(ref mut orch) = *lock {
+        orch.swap_adapter(port, &model_filename);
+        config.write().await.chat_model = model_filename;
+    }
     Ok(())
 }
 
@@ -38,51 +58,101 @@ pub async fn swap_model(
 
 #[tauri::command]
 pub async fn get_memories(
-    _config: State<'_, SharedConfig>,
+    orchestrator: State<'_, SharedOrchestrator>,
     query: String,
 ) -> CmdResult<Vec<String>> {
-    // EXTEND: Phase 2 — query EpisodicStore and SemanticStore
-    let _ = query;
-    Err("memory store not yet wired (Phase 2)".to_string())
+    let mut lock = orchestrator.lock().await;
+    let orch = lock.as_mut().ok_or("Orchestrator not yet initialised")?;
+
+    let embedding = orch.memory.embedding.embed(&query).await.map_err(to_cmd_err)?;
+    let episodic = orch
+        .memory
+        .episodic
+        .retrieve_similar(embedding.clone(), 5)
+        .await
+        .map_err(to_cmd_err)?;
+    let semantic = orch
+        .memory
+        .semantic
+        .retrieve_relevant(embedding, 5)
+        .await
+        .map_err(to_cmd_err)?;
+
+    let mut results: Vec<String> = episodic.iter().map(|e| e.content.clone()).collect();
+    results.extend(semantic.iter().map(|f| f.fact.clone()));
+    Ok(results)
 }
 
 // ── Debug / monitoring ────────────────────────────────────────────────────────
 
 #[tauri::command]
 pub async fn get_system_status(
-    _config: State<'_, SharedConfig>,
+    orchestrator: State<'_, SharedOrchestrator>,
+    scheduler: State<'_, SharedScheduler>,
 ) -> CmdResult<SystemStatus> {
-    // EXTEND: Phase 4 — read from shared monitor state updated by polling loop
-    Ok(SystemStatus::default())
+    let orch_lock = orchestrator.lock().await;
+    let sched_lock = scheduler.lock().await;
+
+    let active_model = orch_lock.as_ref().map(|o| {
+        let id = o.adapter.model_id();
+        let (quant_type, param_count) = ModelInfo::parse_filename(id);
+        ModelInfo {
+            filename: id.to_string(),
+            quant_type,
+            param_count,
+            file_size_bytes: 0,
+            last_modified: Utc::now(),
+        }
+    });
+
+    let embed_latency = orch_lock
+        .as_ref()
+        .map(|o| o.memory.embedding.last_latency_ms())
+        .unwrap_or(0);
+
+    Ok(SystemStatus {
+        sidecars: HashMap::new(), // EXTEND: Phase 4 — health-check polling
+        active_model,
+        memory: MemoryStats {
+            episodic_count: 0,    // EXTEND: Phase 4 — query table row count
+            semantic_count: 0,
+            last_write: None,
+            last_distillation: None,
+            last_embed_latency_ms: embed_latency,
+        },
+        audio: AudioState::default(), // EXTEND: Phase 4
+        scheduler: sched_lock.state(),
+    })
 }
 
 #[tauri::command]
 pub async fn get_last_context(
-    _config: State<'_, SharedConfig>,
+    orchestrator: State<'_, SharedOrchestrator>,
 ) -> CmdResult<Option<AssembledContext>> {
-    // EXTEND: Phase 3 — return last AssembledContext stored by the orchestrator
-    Ok(None)
+    Ok(orchestrator.lock().await.as_ref().and_then(|o| o.last_context.clone()))
 }
 
 #[tauri::command]
 pub async fn fire_deferred_now(
-    _config: State<'_, SharedConfig>,
+    scheduler: State<'_, SharedScheduler>,
+    app_handle: tauri::AppHandle,
     id: String,
 ) -> CmdResult<()> {
-    // EXTEND: Phase 3 — look up DeferredMessage by id in scheduler, fire immediately
-    let _ = id;
-    Err("scheduler not yet wired (Phase 3)".to_string())
+    let mut sched = scheduler.lock().await;
+    match sched.fire_now(&id) {
+        Some(msg) => {
+            app_handle.emit("proactive_message", &msg).map_err(to_cmd_err)?;
+            Ok(())
+        }
+        None => Err(format!("no pending message with id {id}")),
+    }
 }
 
 // ── Model management ──────────────────────────────────────────────────────────
 
-/// Scan the models directory and return metadata for every *.gguf file found.
 #[tauri::command]
 pub async fn list_models(config: State<'_, SharedConfig>) -> CmdResult<Vec<ModelInfo>> {
-    let models_dir = {
-        let cfg = config.read().await;
-        cfg.models_dir.clone()
-    };
+    let models_dir = config.read().await.models_dir.clone();
 
     if !models_dir.exists() {
         return Ok(vec![]);
@@ -97,7 +167,6 @@ pub async fn list_models(config: State<'_, SharedConfig>) -> CmdResult<Vec<Model
         if path.extension().and_then(|e| e.to_str()) != Some("gguf") {
             continue;
         }
-
         let filename = path
             .file_name()
             .and_then(|n| n.to_str())
@@ -109,16 +178,12 @@ pub async fn list_models(config: State<'_, SharedConfig>) -> CmdResult<Vec<Model
         let last_modified = meta
             .modified()
             .map(|t| {
-                let duration = t
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default();
-                chrono::DateTime::from_timestamp(duration.as_secs() as i64, 0)
-                    .unwrap_or_default()
+                let secs = t.duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                chrono::DateTime::from_timestamp(secs as i64, 0).unwrap_or_default()
             })
             .unwrap_or_default();
 
         let (quant_type, param_count) = ModelInfo::parse_filename(&filename);
-
         models.push(ModelInfo { filename, quant_type, param_count, file_size_bytes, last_modified });
     }
 
@@ -130,7 +195,6 @@ pub async fn list_models(config: State<'_, SharedConfig>) -> CmdResult<Vec<Model
 
 #[tauri::command]
 pub async fn get_debug_events(
-    _config: State<'_, SharedConfig>,
     limit: Option<usize>,
 ) -> CmdResult<Vec<serde_json::Value>> {
     // EXTEND: Phase 4 — return last N events from shared ring-buffer in monitor
