@@ -39,16 +39,16 @@ pub fn run() {
             let handle_init = app_handle.clone();
             let log_init = event_log.clone();
             tauri::async_runtime::spawn(async move {
-                monitor::push_event(&log_init, "[ORCHESTRATOR]", "initialising…");
+                monitor::emit_debug_event(&handle_init, &log_init, "[ORCHESTRATOR]", "initialising…").await;
                 match Orchestrator::new(cfg_init).await {
                     Ok(o) => {
                         *orch_init.lock().await = Some(o);
-                        monitor::push_event(&log_init, "[ORCHESTRATOR]", "ready");
+                        monitor::emit_debug_event(&handle_init, &log_init, "[ORCHESTRATOR]", "ready").await;
                         let _ = handle_init.emit("orchestrator_ready", ());
                     }
                     Err(e) => {
                         let msg = format!("init failed: {e}");
-                        monitor::push_event(&log_init, "[ORCHESTRATOR]", &msg);
+                        monitor::emit_debug_event(&handle_init, &log_init, "[ORCHESTRATOR]", &msg).await;
                         let _ = handle_init.emit("init_error", e.to_string());
                     }
                 }

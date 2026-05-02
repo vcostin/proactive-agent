@@ -21,3 +21,72 @@ export interface DeferredMessage {
   trigger: string;
   fire_at: string;
 }
+
+// ── Debug / monitor types ─────────────────────────────────────────────────────
+
+export interface SidecarHealthEvent {
+  name: string;
+  alive: boolean;
+  port: number;
+  latency_ms: number;
+  status_code: number;
+}
+
+export interface MemoryStats {
+  episodic_count: number;
+  semantic_count: number;
+  last_write: string | null;
+  last_distillation: string | null;
+  last_embed_latency_ms: number;
+}
+
+export interface AudioState {
+  device_name: string;
+  sample_rate: number;
+  channels: number;
+  vad_state: 'Silent' | 'Active';
+  energy_level: number;
+  last_stt_result: string | null;
+  last_stt_latency_ms: number;
+  last_tts_latency_ms: number;
+  tts_buffer_fill_pct: number;
+}
+
+export interface SchedulerState {
+  pending: DeferredMessage[];
+  last_fired: DeferredMessage | null;
+}
+
+export interface SystemStatus {
+  sidecars: Record<string, SidecarHealthEvent>;
+  active_model: ModelInfo | null;
+  memory: MemoryStats;
+  audio: AudioState;
+  scheduler: SchedulerState;
+}
+
+export interface ContextBlock {
+  label: string;
+  content: string;
+  token_count: number;
+}
+
+export interface Turn {
+  role: string;
+  content: string;
+}
+
+export interface AssembledContext {
+  persona: ContextBlock;
+  semantic: ContextBlock;
+  episodic: ContextBlock;
+  recent_turns: Turn[];
+  user_input: string;
+  assembled_at: string;
+}
+
+export interface DebugEvent {
+  timestamp: string;
+  component: string;
+  message: string;
+}

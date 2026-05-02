@@ -180,6 +180,28 @@ pub fn push_event(log: &SharedEventLog, component: &str, message: impl Into<Stri
     }
 }
 
+/// Append and also emit a live `debug_event` Tauri event so the frontend
+/// event log updates without waiting for the next poll.
+pub async fn emit_debug_event(
+    app_handle: &tauri::AppHandle,
+    log: &SharedEventLog,
+    component: &str,
+    message: impl Into<String>,
+) {
+    let event = DebugEvent {
+        timestamp: Utc::now(),
+        component: component.to_string(),
+        message: message.into(),
+    };
+    if let Ok(mut guard) = log.lock() {
+        if guard.len() >= MAX_EVENT_LOG {
+            guard.pop_front();
+        }
+        guard.push_back(event.clone());
+    }
+    let _ = app_handle.emit("debug_event", &event);
+}
+
 // ── Health-check polling loop ─────────────────────────────────────────────────
 
 /// Long-running task — polls each sidecar's /health endpoint every 5 seconds
@@ -220,11 +242,12 @@ pub async fn run_monitor_loop(
             let latency_ms = start.elapsed().as_millis() as u64;
 
             if !alive {
-                push_event(
+                emit_debug_event(
+                    &app_handle,
                     &event_log,
                     "[MONITOR]",
                     format!("sidecar {name} unreachable on :{port}"),
-                );
+                ).await;
             }
 
             let _ = app_handle.emit(

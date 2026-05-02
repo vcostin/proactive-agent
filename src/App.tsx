@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { ChatWindow } from './components/chat/ChatWindow';
+import { DebugPanel } from './components/debug/DebugPanel';
 import { ModelPanel } from './components/models/ModelPanel';
 
 type Tab = 'chat' | 'debug' | 'models';
@@ -41,7 +42,7 @@ export default function App() {
             onModelClick={() => setTab('models')}
           />
         )}
-        {tab === 'debug' && <DebugPlaceholder />}
+        {tab === 'debug' && <DebugPanel />}
         {tab === 'models' && (
           <ModelPanel
             activeModel={activeModel}
@@ -53,15 +54,3 @@ export default function App() {
   );
 }
 
-function DebugPlaceholder() {
-  return (
-    <div style={{
-      flex: 1, display: 'flex', alignItems: 'center',
-      justifyContent: 'center', flexDirection: 'column', gap: 8,
-      color: 'var(--text-muted)',
-    }}>
-      <span style={{ fontSize: 16 }}>debug</span>
-      <span style={{ fontSize: 11 }}>Phase 6</span>
-    </div>
-  );
-}
