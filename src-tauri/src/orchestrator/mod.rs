@@ -37,13 +37,12 @@ pub struct Orchestrator {
 
 impl Orchestrator {
     pub async fn new(config: Arc<RwLock<AppConfig>>) -> Result<Self> {
-        let (db_path, embed_port, llama_port, chat_model) = {
+        let (db_path, embed_port, llama_port) = {
             let cfg = config.read().await;
             (
                 cfg.db_path.to_str().unwrap_or("data/memory").to_string(),
                 cfg.embed_port,
                 cfg.llama_port,
-                cfg.chat_model.clone(),
             )
         };
 
