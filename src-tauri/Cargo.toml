@@ -27,8 +27,10 @@ chrono = { version = "0.4", features = ["serde"] }
 # Pin exactly — the lancedb Rust API has had breaking changes between minor versions.
 # Run `cargo tree -i lancedb` and verify arrow-array version matches before updating.
 lancedb = "0.14"
-arrow-array = "52"
-arrow-schema = "52"
+# Must match lancedb 0.14's transitive arrow dep (confirmed via `cargo tree -i arrow-array`)
+arrow-array = "53"
+arrow-schema = "53"
+futures = "0.3"
 
 cpal = "0.15"
 uuid = { version = "1", features = ["v4", "serde"] }
