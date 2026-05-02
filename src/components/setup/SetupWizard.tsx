@@ -2,7 +2,8 @@ import { open } from '@tauri-apps/plugin-dialog';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { useEffect, useState } from 'react';
-import { DownloadProgress, SetupStatus } from '../../types';
+import { DownloadProgress, SetupStatus, SystemDeps } from '../../types';
+import { SystemRequirements } from './SystemRequirements';
 
 interface Props {
   status: SetupStatus;
@@ -13,6 +14,7 @@ type Step = 'models' | 'chat';
 
 export function SetupWizard({ status, onComplete }: Props) {
   const [step, setStep] = useState<Step>(!status.embed_model_ready || !status.whisper_model_ready ? 'models' : 'chat');
+  const [deps, setDeps] = useState<SystemDeps | null>(null);
   const [downloading, setDownloading] = useState(false);
   const [progress, setProgress] = useState<Record<string, DownloadProgress>>({});
   const [error, setError] = useState<string | null>(null);
@@ -96,6 +98,8 @@ export function SetupWizard({ status, onComplete }: Props) {
           {step === 'models' && (
             <ModelsStep
               status={status}
+              deps={deps}
+              onDepsChange={setDeps}
               progress={progress}
               downloading={downloading}
               error={error}
@@ -125,8 +129,10 @@ export function SetupWizard({ status, onComplete }: Props) {
 
 // ── Step 1: required models ───────────────────────────────────────────────────
 
-function ModelsStep({ status, progress, downloading, error, onDownload, onSkip }: {
+function ModelsStep({ status, deps, onDepsChange, progress, downloading, error, onDownload, onSkip }: {
   status: SetupStatus;
+  deps: SystemDeps | null;
+  onDepsChange: (d: SystemDeps) => void;
   progress: Record<string, DownloadProgress>;
   downloading: boolean;
   error: string | null;
@@ -153,7 +159,9 @@ function ModelsStep({ status, progress, downloading, error, onDownload, onSkip }
   const allReady = models.every(m => m.ready);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <SystemRequirements onChange={onDepsChange} />
+
       <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: 0 }}>
         Two small models are required for vector memory and voice input.
         They download once and live in your app data folder.
@@ -194,6 +202,20 @@ function ModelsStep({ status, progress, downloading, error, onDownload, onSkip }
       {error && (
         <div style={{ fontSize: 11, color: 'var(--error)', padding: '6px 10px', border: '1px solid var(--error)', borderRadius: 'var(--radius)' }}>
           {error}
+        </div>
+      )}
+
+      {/* Warn if deps not met, but don't block — user can proceed and fix later */}
+      {deps && !deps.llama_server_ok && (
+        <div style={{
+          fontSize: 11, padding: '6px 10px',
+          background: 'rgba(224,85,85,0.1)',
+          border: '1px solid var(--error)',
+          borderRadius: 'var(--radius)',
+          color: 'var(--error)',
+        }}>
+          ⚠ llama-server won't run until system requirements are met.
+          Fix the issues above, then continue.
         </div>
       )}
 

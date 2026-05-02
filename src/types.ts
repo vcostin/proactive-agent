@@ -15,6 +15,13 @@ export interface DownloadProgress {
   done: boolean;
 }
 
+export interface SystemDeps {
+  vcredist_ok: boolean;
+  vulkan_ok: boolean;
+  llama_server_ok: boolean;
+  llama_server_msg: string;
+}
+
 
 export interface ModelInfo {
   filename: string;

@@ -87,6 +87,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::get_setup_status,
+            commands::check_system_deps,
+            commands::install_vcredist,
             commands::pick_model_file,
             commands::download_required_models,
             commands::send_message,

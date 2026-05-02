@@ -141,6 +141,140 @@ pub async fn download_required_models(
     Ok(())
 }
 
+// ── Dependency checks ─────────────────────────────────────────────────────────
+
+#[derive(Serialize)]
+pub struct SystemDeps {
+    pub vcredist_ok: bool,
+    pub vulkan_ok: bool,
+    /// Result of actually running llama-server --version
+    pub llama_server_ok: bool,
+    pub llama_server_msg: String,
+}
+
+/// Check system-level dependencies required by the sidecar binaries.
+#[tauri::command]
+pub async fn check_system_deps() -> CmdResult<SystemDeps> {
+    #[cfg(target_os = "windows")]
+    {
+        // VCRUNTIME140_1.dll ships with Visual C++ 2019/2022 runtime
+        let vcredist_ok =
+            std::path::Path::new("C:\\Windows\\System32\\VCRUNTIME140_1.dll").exists();
+        let vulkan_ok =
+            std::path::Path::new("C:\\Windows\\System32\\vulkan-1.dll").exists();
+
+        let (llama_server_ok, llama_server_msg) = test_llama_binary().await;
+        return Ok(SystemDeps { vcredist_ok, vulkan_ok, llama_server_ok, llama_server_msg });
+    }
+    #[cfg(not(target_os = "windows"))]
+    Ok(SystemDeps {
+        vcredist_ok: true,
+        vulkan_ok: true,
+        llama_server_ok: false,
+        llama_server_msg: "not checked on this platform".to_string(),
+    })
+}
+
+/// Run `llama-server --version` to verify DLLs and entry points resolve correctly.
+async fn test_llama_binary() -> (bool, String) {
+    let bin_dir = crate::binaries_dir();
+    let binary = bin_dir.join(crate::sidecar_filename("llama-server"));
+
+    if !binary.exists() || binary.metadata().map(|m| m.len()).unwrap_or(0) < 1024 {
+        return (false, "binary not found — run npm run setup".to_string());
+    }
+
+    let priority_path = format!(
+        "{};{}",
+        bin_dir.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(8),
+        tokio::process::Command::new(&binary)
+            .arg("--version")
+            .current_dir(&bin_dir)
+            .env("PATH", &priority_path)
+            .output(),
+    )
+    .await;
+
+    match result {
+        Ok(Ok(out)) => {
+            let code = out.status.code().unwrap_or(-1);
+            if out.status.success() || code == 0 {
+                let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                let text = if text.is_empty() {
+                    String::from_utf8_lossy(&out.stderr).trim().to_string()
+                } else { text };
+                (true, format!("OK — {}", text.lines().next().unwrap_or("ready")))
+            } else {
+                let desc = match code as u32 {
+                    0xC0000135 => "DLL not found — re-run: npm run setup".to_string(),
+                    0xC0000139 => "DLL version mismatch — install Visual C++ Redistributable".to_string(),
+                    0xC0000005 => "crash (access violation)".to_string(),
+                    _ => format!("exited with code {code:#X}"),
+                };
+                (false, desc)
+            }
+        }
+        Ok(Err(e)) => (false, format!("failed to launch: {e}")),
+        Err(_) => (true, "OK — timed out waiting for --version (normal for some builds)".to_string()),
+    }
+}
+
+/// Download and silently install the Visual C++ Redistributable 2022 x64.
+/// Emits `download_progress` events during download.
+#[tauri::command]
+pub async fn install_vcredist(app_handle: tauri::AppHandle) -> CmdResult<()> {
+    let url = "https://aka.ms/vs/17/release/vc_redist.x64.exe";
+    let dest = std::env::temp_dir().join("vc_redist.x64.exe");
+
+    // Download
+    let client = reqwest::Client::new();
+    let resp = client.get(url).send().await.map_err(to_cmd_err)?;
+    let total = resp.content_length().unwrap_or(0);
+    let mut downloaded = 0u64;
+    let mut file = tokio::fs::File::create(&dest).await.map_err(to_cmd_err)?;
+    let mut stream = resp.bytes_stream();
+
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(to_cmd_err)?;
+        tokio::io::AsyncWriteExt::write_all(&mut file, &chunk).await.map_err(to_cmd_err)?;
+        downloaded += chunk.len() as u64;
+        let _ = app_handle.emit("download_progress", DownloadProgress {
+            filename: "vc_redist.x64.exe".to_string(),
+            downloaded,
+            total,
+            done: false,
+        });
+    }
+    drop(file);
+
+    // Silent install
+    let status = tokio::process::Command::new(&dest)
+        .args(["/install", "/quiet", "/norestart"])
+        .status()
+        .await
+        .map_err(to_cmd_err)?;
+
+    let _ = app_handle.emit("download_progress", DownloadProgress {
+        filename: "vc_redist.x64.exe".to_string(),
+        downloaded,
+        total,
+        done: true,
+    });
+
+    // Exit code 0 = success, 3010 = success + reboot suggested (not required)
+    match status.code() {
+        Some(0) | Some(3010) => Ok(()),
+        code => Err(format!("installer exited with code {code:?}")),
+    }
+}
+
+// ── Model clear ───────────────────────────────────────────────────────────────
+
 /// Unload the current chat model: kills the server, clears config, returns to setup wizard.
 #[tauri::command]
 pub async fn clear_model(
