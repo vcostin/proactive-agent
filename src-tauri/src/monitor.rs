@@ -1,6 +1,9 @@
 use chrono::{DateTime, Utc};
+use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
+use std::sync::{Arc, Mutex};
+use tauri::Emitter;
 
 // ── Sidecar health ────────────────────────────────────────────────────────────
 
@@ -143,4 +146,97 @@ impl Default for SystemStatus {
     }
 }
 
-// EXTEND: add health-check polling loop and debug_event emitter (Phase 4)
+// ── Debug event log ───────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DebugEvent {
+    pub timestamp: DateTime<Utc>,
+    /// Component tag: [MEMORY], [AUDIO], [SCHEDULER], [ADAPTER], [ORCHESTRATOR]
+    pub component: String,
+    pub message: String,
+}
+
+/// Shared ring buffer for live debug events. Max 500 entries.
+/// Uses std::sync::Mutex so it's safe to write from both sync callbacks and async tasks.
+pub type SharedEventLog = Arc<Mutex<VecDeque<DebugEvent>>>;
+
+pub const MAX_EVENT_LOG: usize = 500;
+
+pub fn new_event_log() -> SharedEventLog {
+    Arc::new(Mutex::new(VecDeque::with_capacity(MAX_EVENT_LOG)))
+}
+
+/// Append a debug event. Non-blocking — drops the write if the lock is poisoned.
+pub fn push_event(log: &SharedEventLog, component: &str, message: impl Into<String>) {
+    if let Ok(mut guard) = log.lock() {
+        if guard.len() >= MAX_EVENT_LOG {
+            guard.pop_front();
+        }
+        guard.push_back(DebugEvent {
+            timestamp: Utc::now(),
+            component: component.to_string(),
+            message: message.into(),
+        });
+    }
+}
+
+// ── Health-check polling loop ─────────────────────────────────────────────────
+
+/// Long-running task — polls each sidecar's /health endpoint every 5 seconds
+/// and emits `sidecar_health` events to the frontend.
+pub async fn run_monitor_loop(
+    config: Arc<tokio::sync::RwLock<crate::config::AppConfig>>,
+    event_log: SharedEventLog,
+    app_handle: tauri::AppHandle,
+) {
+    let client = Client::builder()
+        .timeout(std::time::Duration::from_secs(2))
+        .build()
+        .unwrap_or_default();
+
+    let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
+    loop {
+        interval.tick().await;
+        let (llama_port, embed_port, whisper_port, kokoro_port) = {
+            let cfg = config.read().await;
+            (cfg.llama_port, cfg.embed_port, cfg.whisper_port, cfg.kokoro_port)
+        };
+
+        let sidecars = [
+            ("llama", llama_port),
+            ("embed", embed_port),
+            ("whisper", whisper_port),
+            ("kokoro", kokoro_port),
+        ];
+
+        for (name, port) in sidecars {
+            let url = format!("http://127.0.0.1:{port}/health");
+            let start = std::time::Instant::now();
+            let (alive, status_code) =
+                match client.get(&url).send().await {
+                    Ok(r) => (r.status().is_success(), r.status().as_u16()),
+                    Err(_) => (false, 0u16),
+                };
+            let latency_ms = start.elapsed().as_millis() as u64;
+
+            if !alive {
+                push_event(
+                    &event_log,
+                    "[MONITOR]",
+                    format!("sidecar {name} unreachable on :{port}"),
+                );
+            }
+
+            let _ = app_handle.emit(
+                "sidecar_health",
+                serde_json::json!({
+                    "name": name,
+                    "alive": alive,
+                    "port": port,
+                    "latency_ms": latency_ms,
+                    "status_code": status_code,
+                }),
+            );
+        }
+    }
+}

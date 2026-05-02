@@ -18,6 +18,14 @@ pub struct MemoryStore {
 }
 
 impl MemoryStore {
+    pub async fn episodic_count(&self) -> u64 {
+        self.episodic.count().await.unwrap_or(0)
+    }
+
+    pub async fn semantic_count(&self) -> u64 {
+        self.semantic.count().await.unwrap_or(0)
+    }
+
     pub async fn open(db_path: &str, embed_port: u16) -> Result<Self> {
         let conn = Arc::new(lancedb::connect(db_path).execute().await?);
         Ok(Self {

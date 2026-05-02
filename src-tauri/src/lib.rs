@@ -6,6 +6,7 @@ mod monitor;
 mod orchestrator;
 
 use config::AppConfig;
+use monitor::{new_event_log, run_monitor_loop, SharedEventLog};
 use orchestrator::{scheduler::ProactivityScheduler, Orchestrator};
 use std::sync::Arc;
 use tauri::{Emitter, Manager};
@@ -20,33 +21,40 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
             let app_handle = app.handle().clone();
+
             let config: SharedConfig = Arc::new(RwLock::new(AppConfig::default()));
             let orchestrator: SharedOrchestrator = Arc::new(Mutex::new(None));
             let scheduler: SharedScheduler =
                 Arc::new(Mutex::new(ProactivityScheduler::new()));
+            let event_log: SharedEventLog = new_event_log();
 
             app.manage(config.clone());
             app.manage(orchestrator.clone());
             app.manage(scheduler.clone());
+            app.manage(event_log.clone());
 
-            // Async-initialise the orchestrator (opens LanceDB, connects to llama.cpp)
+            // ── Orchestrator async init ───────────────────────────────────────
             let orch_init = orchestrator.clone();
             let cfg_init = config.clone();
             let handle_init = app_handle.clone();
+            let log_init = event_log.clone();
             tauri::async_runtime::spawn(async move {
+                monitor::push_event(&log_init, "[ORCHESTRATOR]", "initialising…");
                 match Orchestrator::new(cfg_init).await {
                     Ok(o) => {
                         *orch_init.lock().await = Some(o);
+                        monitor::push_event(&log_init, "[ORCHESTRATOR]", "ready");
                         let _ = handle_init.emit("orchestrator_ready", ());
                     }
                     Err(e) => {
-                        eprintln!("[SETUP] orchestrator init failed: {e}");
+                        let msg = format!("init failed: {e}");
+                        monitor::push_event(&log_init, "[ORCHESTRATOR]", &msg);
                         let _ = handle_init.emit("init_error", e.to_string());
                     }
                 }
             });
 
-            // Proactivity scheduler — runs independently of orchestrator
+            // ── Proactivity scheduler loop ────────────────────────────────────
             let sched_loop = scheduler.clone();
             let handle_sched = app_handle.clone();
             tauri::async_runtime::spawn(async move {
@@ -54,8 +62,17 @@ pub fn run() {
                     .await;
             });
 
-            // EXTEND: Phase 4 — spawn sidecar processes (llama-server, whisper, kokoro)
-            // EXTEND: Phase 4 — start monitor health-check polling task
+            // ── Sidecar health monitor loop ───────────────────────────────────
+            let cfg_monitor = config.clone();
+            let log_monitor = event_log.clone();
+            let handle_monitor = app_handle.clone();
+            tauri::async_runtime::spawn(async move {
+                run_monitor_loop(cfg_monitor, log_monitor, handle_monitor).await;
+            });
+
+            // EXTEND: spawn llama-server, whisper-server, kokoro-server sidecars
+            //   use app.shell().sidecar("llama-server")?.args([...]).spawn()?
+            //   once binaries are placed in binaries/ and tauri.conf.json externalBin is populated
 
             Ok(())
         })

@@ -88,6 +88,11 @@ impl SemanticStore {
         Ok(facts)
     }
 
+    /// Total rows in the semantic table.
+    pub async fn count(&self) -> Result<u64> {
+        Ok(self.table.count_rows(None).await? as u64)
+    }
+
     /// Background distillation: extract long-term facts from recent episodic entries.
     /// Called from a tokio task — never blocks a conversation turn.
     /// EXTEND Phase 3: implement LLM-assisted fact extraction

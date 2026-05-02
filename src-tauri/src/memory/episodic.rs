@@ -102,6 +102,11 @@ impl EpisodicStore {
         Ok(entries)
     }
 
+    /// Total rows in the episodic table.
+    pub async fn count(&self) -> Result<u64> {
+        Ok(self.table.count_rows(None).await? as u64)
+    }
+
     fn schema() -> Schema {
         Schema::new(vec![
             Field::new("id", DataType::Utf8, false),

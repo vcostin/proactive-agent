@@ -5,6 +5,7 @@ use tauri::{Emitter, State};
 
 use crate::monitor::{AudioState, MemoryStats, ModelInfo, SystemStatus};
 use crate::orchestrator::context::AssembledContext;
+use crate::monitor::SharedEventLog;
 use crate::{SharedConfig, SharedOrchestrator, SharedScheduler};
 
 type CmdResult<T> = Result<T, String>;
@@ -110,17 +111,22 @@ pub async fn get_system_status(
         .map(|o| o.memory.embedding.last_latency_ms())
         .unwrap_or(0);
 
+    let (episodic_count, semantic_count) = match orch_lock.as_ref() {
+        Some(o) => (o.memory.episodic_count().await, o.memory.semantic_count().await),
+        None => (0, 0),
+    };
+
     Ok(SystemStatus {
-        sidecars: HashMap::new(), // EXTEND: Phase 4 — health-check polling
+        sidecars: HashMap::new(), // populated live via sidecar_health Tauri events
         active_model,
         memory: MemoryStats {
-            episodic_count: 0,    // EXTEND: Phase 4 — query table row count
-            semantic_count: 0,
-            last_write: None,
+            episodic_count,
+            semantic_count,
+            last_write: None,       // EXTEND: track in EpisodicStore
             last_distillation: None,
             last_embed_latency_ms: embed_latency,
         },
-        audio: AudioState::default(), // EXTEND: Phase 4
+        audio: AudioState::default(), // EXTEND: read from SharedAudioState once audio started
         scheduler: sched_lock.state(),
     })
 }
@@ -195,9 +201,22 @@ pub async fn list_models(config: State<'_, SharedConfig>) -> CmdResult<Vec<Model
 
 #[tauri::command]
 pub async fn get_debug_events(
+    event_log: State<'_, SharedEventLog>,
     limit: Option<usize>,
 ) -> CmdResult<Vec<serde_json::Value>> {
-    // EXTEND: Phase 4 — return last N events from shared ring-buffer in monitor
-    let _ = limit;
-    Ok(vec![])
+    let n = limit.unwrap_or(100).min(500);
+    let guard = event_log.lock().map_err(to_cmd_err)?;
+    let events = guard
+        .iter()
+        .rev()
+        .take(n)
+        .map(|e| {
+            serde_json::json!({
+                "timestamp": e.timestamp.to_rfc3339(),
+                "component": e.component,
+                "message": e.message,
+            })
+        })
+        .collect();
+    Ok(events)
 }
