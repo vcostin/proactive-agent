@@ -24,9 +24,8 @@ pub trait ModelAdapter: Send + Sync {
 pub struct LlamaCppAdapter {
     client: Client,
     base_url: String,
-    /// Fallback alias (passed via --alias when starting the server).
     fallback_alias: String,
-    /// Discovered model ID from GET /v1/models — cached after first successful query.
+    /// Model ID discovered from GET /v1/models — populated on first use.
     discovered_id: Arc<RwLock<Option<String>>>,
 }
 
@@ -40,42 +39,54 @@ impl LlamaCppAdapter {
         }
     }
 
-    /// Query GET /v1/models and return the first model ID the server reports.
-    /// Caches the result so subsequent calls are instant.
-    /// Falls back to the configured alias if the query fails.
-    async fn resolve_model_id(&self) -> String {
-        // Fast path: return cached ID
-        if let Some(ref id) = *self.discovered_id.read().await {
-            return id.clone();
+    /// Ask the server what model ID it actually uses.
+    /// Fully async — no block_in_place or block_on.
+    async fn discover_model_id(&self) -> Option<String> {
+        #[derive(Deserialize)]
+        struct ModelsResp {
+            data: Vec<ModelEntry>,
+        }
+        #[derive(Deserialize)]
+        struct ModelEntry {
+            id: String,
         }
 
-        // Query the server for its actual model list
-        #[derive(Deserialize)]
-        struct ModelsResp { data: Vec<ModelEntry> }
-        #[derive(Deserialize)]
-        struct ModelEntry { id: String }
-
-        let discovered = self.client
+        let resp = self
+            .client
             .get(format!("{}/v1/models", self.base_url))
             .timeout(std::time::Duration::from_secs(3))
             .send()
             .await
-            .ok()
-            .and_then(|r| r.error_for_status().ok())
-            .and_then(|r| {
-                // Parse synchronously from bytes to avoid nested async
-                tokio::task::block_in_place(|| {
-                    futures::executor::block_on(r.json::<ModelsResp>()).ok()
-                })
-            })
-            .and_then(|m| m.data.into_iter().next())
-            .map(|m| m.id);
+            .ok()?
+            .error_for_status()
+            .ok()?;
 
-        if let Some(ref id) = discovered {
-            *self.discovered_id.write().await = Some(id.clone());
-            return id.clone();
+        resp.json::<ModelsResp>()
+            .await
+            .ok()?
+            .data
+            .into_iter()
+            .next()
+            .map(|m| m.id)
+    }
+
+    /// Return the model ID to use in API calls — cached after the first query.
+    async fn resolve_model_id(&self) -> String {
+        // Fast path
+        {
+            let guard = self.discovered_id.read().await;
+            if let Some(ref id) = *guard {
+                return id.clone();
+            }
         }
 
+        // Query and cache
+        if let Some(id) = self.discover_model_id().await {
+            *self.discovered_id.write().await = Some(id.clone());
+            return id;
+        }
+
+        // Fall back to the configured alias
         self.fallback_alias.clone()
     }
 }
