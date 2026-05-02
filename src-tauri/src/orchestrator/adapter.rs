@@ -26,20 +26,14 @@ pub struct LlamaCppAdapter {
 }
 
 impl LlamaCppAdapter {
-    pub fn new(port: u16, model: impl Into<String>) -> Self {
-        let full = model.into();
-        // llama.cpp b9009+ validates the model field against the loaded model's ID.
-        // The server registers models by filename stem (no path, no extension).
-        // Sending the full path causes 404. Extract the stem so the IDs match.
-        let model_id = std::path::Path::new(&full)
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .map(|s| s.to_string())
-            .unwrap_or(full);
+    /// `model_alias` must match the `--alias` flag passed to llama-server.
+    /// We use "llama-chat" for the chat server so the ID is always predictable
+    /// regardless of what model file is loaded.
+    pub fn new(port: u16, model_alias: impl Into<String>) -> Self {
         Self {
             client: Client::new(),
             base_url: format!("http://127.0.0.1:{port}"),
-            model: model_id,
+            model: model_alias.into(),
         }
     }
 }

@@ -213,7 +213,8 @@ pub fn start_chat_server(
                    "--port", &port.to_string(),
                    "--host", "127.0.0.1",
                    "--ctx-size", "4096",
-                   "-ngl", "999"])
+                   "-ngl", "999",
+                   "--alias", "llama-chat"])   // fixed alias so adapter always knows the model ID
             .spawn();
 
         match spawn_result {
@@ -267,14 +268,16 @@ fn spawn_sidecars(config: SharedConfig, event_log: SharedEventLog, chat_child: S
             start_chat_server(chat_model, llama_port, event_log.clone(), chat_child);
         }
 
-        // Embeddings: newer llama.cpp exposes /v1/embeddings on all instances by default.
-        // --embedding flag removed — caused early exit on b9008+.
+        // --embedding enables the /v1/embeddings endpoint.
+        // Previously removed due to DLL crashes (now fixed); must be present.
         spawn_direct("llama-server", "llama (embed)",
             vec!["--model".into(), embed_path,
                  "--port".into(), embed_port.to_string(),
                  "--host".into(), "127.0.0.1".into(),
                  "--ctx-size".into(), "512".into(),
-                 "-ngl".into(), "999".into()],
+                 "-ngl".into(), "999".into(),
+                 "--embedding".into(),
+                 "--alias".into(), "nomic-embed-text".into()],
             event_log.clone());
 
         // whisper-server uses -p for port (not --port)

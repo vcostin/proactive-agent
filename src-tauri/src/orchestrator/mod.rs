@@ -49,7 +49,8 @@ impl Orchestrator {
 
         let memory = MemoryStore::open(&db_path, embed_port).await?;
         let adapter: Box<dyn ModelAdapter + Send + Sync> =
-            Box::new(LlamaCppAdapter::new(llama_port, chat_model));
+            // "llama-chat" matches the --alias flag in start_chat_server
+            Box::new(LlamaCppAdapter::new(llama_port, "llama-chat"));
 
         Ok(Self {
             adapter,
@@ -158,8 +159,9 @@ impl Orchestrator {
     }
 
     /// Replace the chat adapter without touching memory or persona.
-    pub fn swap_adapter(&mut self, port: u16, model: impl Into<String>) {
-        self.adapter = Box::new(LlamaCppAdapter::new(port, model));
+    /// The alias is always "llama-chat" — matches --alias in start_chat_server.
+    pub fn swap_adapter(&mut self, port: u16, _model_path: impl Into<String>) {
+        self.adapter = Box::new(LlamaCppAdapter::new(port, "llama-chat"));
     }
 }
 
