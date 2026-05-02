@@ -268,9 +268,65 @@ pub async fn install_vcredist(app_handle: tauri::AppHandle) -> CmdResult<()> {
 
     // Exit code 0 = success, 3010 = success + reboot suggested (not required)
     match status.code() {
-        Some(0) | Some(3010) => Ok(()),
+        Some(0) | Some(3010) => {
+            // VCRedist updated the DLLs in System32 — copy them into binaries/ too.
+            // This ensures our sidecars find the correct version in their own directory
+            // (exe directory has highest DLL search priority) regardless of what else
+            // is on the system PATH.
+            copy_vcredist_dlls_to_binaries();
+            Ok(())
+        }
         code => Err(format!("installer exited with code {code:?}")),
     }
+}
+
+/// Copy the Visual C++ runtime DLLs from System32 into our binaries/ directory.
+/// Called automatically after VCRedist install and can be triggered manually.
+fn copy_vcredist_dlls_to_binaries() {
+    let bin_dir = crate::binaries_dir();
+    let system32 = std::path::Path::new("C:\\Windows\\System32");
+    let dlls = [
+        "VCRUNTIME140.dll",
+        "VCRUNTIME140_1.dll",
+        "MSVCP140.dll",
+        "MSVCP140_2.dll",
+        "CONCRT140.dll",
+    ];
+    for dll in &dlls {
+        let src = system32.join(dll);
+        if src.exists() {
+            let dst = bin_dir.join(dll);
+            let _ = std::fs::copy(&src, &dst);
+        }
+    }
+}
+
+/// Open a terminal window that runs llama-server directly so the Windows
+/// "procedure entry point not found" dialog appears — it names the exact
+/// DLL and function that is missing.
+#[tauri::command]
+pub async fn open_llama_diagnostic() -> CmdResult<()> {
+    let bin_dir = crate::binaries_dir();
+    let binary = bin_dir.join(crate::sidecar_filename("llama-server"));
+
+    if !binary.exists() {
+        return Err("llama-server binary not found".to_string());
+    }
+
+    // Open a cmd window that stays open so the user can read the error dialog
+    tokio::process::Command::new("cmd")
+        .args([
+            "/K",
+            &format!(
+                "cd /d \"{}\" && echo Running llama-server... && \"{}\" --version && echo OK - binary works! || echo Binary failed - read the error dialog above",
+                bin_dir.display(),
+                binary.display()
+            ),
+        ])
+        .spawn()
+        .map_err(to_cmd_err)?;
+
+    Ok(())
 }
 
 // ── Model clear ───────────────────────────────────────────────────────────────

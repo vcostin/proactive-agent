@@ -94,9 +94,15 @@ export function RequirementsBanner() {
                 }}
               />
               <p style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 12, lineHeight: 1.6 }}>
-                Click <strong style={{ color: 'var(--text)' }}>update (~7 MB)</strong> above
-                — this downloads and installs the latest Visual C++ runtime silently.
-                Then restart the app. That's it.
+                Click <strong style={{ color: 'var(--text)' }}>update (~7 MB)</strong> —
+                installs the latest Visual C++ runtime <em>and</em> copies the fresh DLLs
+                directly into the app's binaries folder so they're always found first.
+                Then restart the app.
+                <br /><br />
+                If it still fails after that, click{' '}
+                <strong style={{ color: 'var(--text)' }}>show error →</strong> next to
+                the llama-server row — a terminal window will open and Windows will show
+                the <em>exact</em> missing DLL name.
               </p>
             </div>
           </div>

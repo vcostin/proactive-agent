@@ -100,6 +100,7 @@ pub fn run() {
             commands::get_setup_status,
             commands::check_system_deps,
             commands::install_vcredist,
+            commands::open_llama_diagnostic,
             commands::pick_model_file,
             commands::download_required_models,
             commands::send_message,

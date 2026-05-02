@@ -167,6 +167,15 @@ export function SystemRequirements({ onChange }: Props) {
               label="llama-server binary"
               okNote={deps.llama_server_msg}
               failNote={deps.llama_server_msg}
+              action={!deps.llama_server_ok ? (
+                <button
+                  onClick={async () => { await invoke('open_llama_diagnostic'); }}
+                  style={{ fontSize: 10, padding: '1px 8px', flexShrink: 0 }}
+                  title="Open a terminal window — Windows will show the exact missing DLL name"
+                >
+                  show error →
+                </button>
+              ) : undefined}
             />
           </>
         )}
