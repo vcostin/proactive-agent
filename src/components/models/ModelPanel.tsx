@@ -7,11 +7,13 @@ import { ModelList } from './ModelList';
 interface Props {
   activeModel: string;
   onModelLoaded: (path: string) => void;
+  onModelCleared: () => void;
 }
 
-export function ModelPanel({ activeModel, onModelLoaded }: Props) {
+export function ModelPanel({ activeModel, onModelLoaded, onModelCleared }: Props) {
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [loading, setLoading] = useState<string | null>(null);
+  const [clearing, setClearing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const refresh = () => {
@@ -65,6 +67,23 @@ export function ModelPanel({ activeModel, onModelLoaded }: Props) {
         <button onClick={refresh} style={{ fontSize: 11, padding: '2px 8px' }}>
           ↻ refresh
         </button>
+        {activeModel && (
+          <button
+            onClick={async () => {
+              if (!confirm('Unload the current model and return to setup?')) return;
+              setClearing(true);
+              try {
+                await invoke('clear_model');
+                onModelCleared();
+              } catch (e) { setError(String(e)); }
+              finally { setClearing(false); }
+            }}
+            disabled={clearing}
+            style={{ fontSize: 11, padding: '4px 14px', color: 'var(--error)', borderColor: 'var(--error)' }}
+          >
+            {clearing ? '…' : 'unload'}
+          </button>
+        )}
         <button className="primary" onClick={handleBrowse} style={{ fontSize: 11, padding: '4px 14px' }}>
           + Browse for .gguf…
         </button>

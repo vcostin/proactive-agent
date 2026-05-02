@@ -16,7 +16,6 @@ use tokio::sync::{Mutex, RwLock};
 pub type SharedConfig = Arc<RwLock<AppConfig>>;
 pub type SharedOrchestrator = Arc<Mutex<Option<Orchestrator>>>;
 pub type SharedScheduler = Arc<Mutex<ProactivityScheduler>>;
-/// Holds the chat llama-server child process so it can be killed on model swap.
 pub type SharedChatChild = Arc<Mutex<Option<tokio::process::Child>>>;
 
 pub fn run() {
@@ -49,10 +48,8 @@ pub fn run() {
             app.manage(event_log.clone());
             app.manage(chat_child.clone());
 
-            // ── Sidecar processes ─────────────────────────────────────────────
             spawn_sidecars(config.clone(), event_log.clone(), chat_child.clone());
 
-            // ── Orchestrator async init ───────────────────────────────────────
             let orch_init = orchestrator.clone();
             let cfg_init = config.clone();
             let handle_init = app_handle.clone();
@@ -73,14 +70,12 @@ pub fn run() {
                 }
             });
 
-            // ── Proactivity scheduler loop ────────────────────────────────────
             let sched_loop = scheduler.clone();
             let handle_sched = app_handle.clone();
             tauri::async_runtime::spawn(async move {
                 orchestrator::scheduler::run_scheduler_loop(sched_loop, handle_sched).await;
             });
 
-            // ── Sidecar health monitor loop ───────────────────────────────────
             let cfg_monitor = config.clone();
             let log_monitor = event_log.clone();
             let handle_monitor = app_handle.clone();
@@ -96,6 +91,7 @@ pub fn run() {
             commands::download_required_models,
             commands::send_message,
             commands::swap_model,
+            commands::clear_model,
             commands::get_memories,
             commands::get_system_status,
             commands::get_last_context,
@@ -109,11 +105,8 @@ pub fn run() {
 
 // ── Process helpers ───────────────────────────────────────────────────────────
 
-/// Resolves the `binaries/` directory regardless of where CWD is.
-/// In dev mode CWD is src-tauri/; in release the exe sits next to the binaries.
 pub fn binaries_dir() -> PathBuf {
     let cwd = std::env::current_dir().unwrap_or_default();
-    // Dev mode: CWD == …/src-tauri/ — step up to project root
     let root = match cwd.file_name().and_then(|n| n.to_str()) {
         Some("src-tauri") => cwd.parent().unwrap_or(&cwd).to_path_buf(),
         _ => cwd,
@@ -121,23 +114,35 @@ pub fn binaries_dir() -> PathBuf {
     root.join("binaries")
 }
 
-/// Platform-specific binary filename with Tauri target-triple suffix.
 pub fn sidecar_filename(name: &str) -> String {
     #[cfg(target_os = "windows")]
     return format!("{name}-x86_64-pc-windows-msvc.exe");
     #[cfg(target_os = "macos")]
     {
-        if cfg!(target_arch = "aarch64") {
-            return format!("{name}-aarch64-apple-darwin");
-        }
+        if cfg!(target_arch = "aarch64") { return format!("{name}-aarch64-apple-darwin"); }
         return format!("{name}-x86_64-apple-darwin");
     }
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     return format!("{name}-x86_64-unknown-linux-gnu");
 }
 
-/// Start (or restart) the chat llama-server.
-/// Sets current_dir to binaries/ so Windows finds all bundled DLLs.
+/// Build a tokio::process::Command that prioritises our bundled DLLs on Windows.
+/// By prepending `bin_dir` to PATH we ensure our ggml/llama DLLs are found
+/// before any conflicting versions from LM Studio, CUDA installers, etc.
+fn make_cmd(binary: &PathBuf, bin_dir: &PathBuf) -> tokio::process::Command {
+    let mut cmd = tokio::process::Command::new(binary);
+    cmd.current_dir(bin_dir);
+    cmd.stdout(std::process::Stdio::piped());
+    cmd.stderr(std::process::Stdio::piped());
+
+    // Prepend our binaries/ to PATH so Windows DLL search finds our versions first
+    let current_path = std::env::var("PATH").unwrap_or_default();
+    let priority_path = format!("{};{}", bin_dir.display(), current_path);
+    cmd.env("PATH", priority_path);
+
+    cmd
+}
+
 pub fn start_chat_server(
     model_path: String,
     port: u16,
@@ -145,7 +150,6 @@ pub fn start_chat_server(
     chat_child: SharedChatChild,
 ) {
     tauri::async_runtime::spawn(async move {
-        // Kill previous instance and wait for port to free
         {
             let mut guard = chat_child.lock().await;
             if let Some(mut old) = guard.take() {
@@ -159,40 +163,42 @@ pub fn start_chat_server(
 
         if !binary.exists() || binary.metadata().map(|m| m.len()).unwrap_or(0) < 1024 {
             monitor::push_event(&event_log, "[ADAPTER]",
-                format!("llama (chat): binary not found at {}", binary.display()));
+                format!("llama (chat) binary not found at {}", binary.display()));
             return;
         }
 
         monitor::push_event(&event_log, "[ADAPTER]",
             format!("llama (chat) launching → {}", binary.display()));
 
-        let spawn_result = tokio::process::Command::new(&binary)
+        let spawn_result = make_cmd(&binary, &bin_dir)
             .args(["--model", &model_path,
                    "--port", &port.to_string(),
                    "--host", "127.0.0.1",
                    "--ctx-size", "4096",
                    "-ngl", "999"])
-            .current_dir(&bin_dir)          // DLLs live here — critical on Windows
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::piped())
             .spawn();
 
         match spawn_result {
             Ok(mut child) => {
                 monitor::push_event(&event_log, "[ADAPTER]",
                     format!("llama (chat) started (pid {:?})", child.id()));
-
                 let stderr = child.stderr.take();
+                let stdout = child.stdout.take();
                 { *chat_child.lock().await = Some(child); }
 
-                stream_stderr(stderr, "llama (chat)", event_log.clone()).await;
+                // Stream both stdout and stderr
+                tokio::join!(
+                    stream_output(stdout, "llama (chat)", event_log.clone()),
+                    stream_output(stderr, "llama (chat)", event_log.clone()),
+                );
 
-                // Reap exit code once stderr closes
                 let mut guard = chat_child.lock().await;
                 if let Some(mut c) = guard.take() {
                     if let Ok(s) = c.wait().await {
+                        let code = s.code().unwrap_or(-1);
+                        let desc = exit_code_description(code);
                         monitor::push_event(&event_log, "[ADAPTER]",
-                            format!("llama (chat) exited (code {:?})", s.code()));
+                            format!("llama (chat) exited (code {code} — {desc})"));
                     }
                 }
             }
@@ -204,11 +210,7 @@ pub fn start_chat_server(
     });
 }
 
-fn spawn_sidecars(
-    config: SharedConfig,
-    event_log: SharedEventLog,
-    chat_child: SharedChatChild,
-) {
+fn spawn_sidecars(config: SharedConfig, event_log: SharedEventLog, chat_child: SharedChatChild) {
     tauri::async_runtime::spawn(async move {
         let cfg = config.read().await;
         let chat_model   = cfg.chat_model.clone();
@@ -227,19 +229,20 @@ fn spawn_sidecars(
             start_chat_server(chat_model, llama_port, event_log.clone(), chat_child);
         }
 
+        // Embeddings: newer llama.cpp exposes /v1/embeddings on all instances by default.
+        // --embedding flag removed — caused early exit on b9008+.
         spawn_direct("llama-server", "llama (embed)",
             vec!["--model".into(), embed_path,
                  "--port".into(), embed_port.to_string(),
                  "--host".into(), "127.0.0.1".into(),
                  "--ctx-size".into(), "512".into(),
-                 "-ngl".into(), "999".into(),
-                 "--embedding".into()],
+                 "-ngl".into(), "999".into()],
             event_log.clone());
 
+        // whisper-server uses -p for port (not --port)
         spawn_direct("whisper-server", "whisper",
             vec!["-m".into(), whisper_path,
-                 "--port".into(), whisper_port.to_string(),
-                 "--host".into(), "127.0.0.1".into()],
+                 "-p".into(), whisper_port.to_string()],
             event_log.clone());
 
         spawn_direct("kokoro-server", "kokoro",
@@ -249,8 +252,6 @@ fn spawn_sidecars(
     });
 }
 
-/// Spawn a sidecar using tokio::process::Command with current_dir = binaries/.
-/// This ensures Windows DLL search starts in the right directory.
 fn spawn_direct(
     binary_name: &'static str,
     display_name: &'static str,
@@ -270,21 +271,21 @@ fn spawn_direct(
         monitor::push_event(&event_log, "[ADAPTER]",
             format!("{display_name} launching → {}", binary.display()));
 
-        let spawn_result = tokio::process::Command::new(&binary)
-            .args(&args)
-            .current_dir(&bin_dir)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::piped())
-            .spawn();
+        let spawn_result = make_cmd(&binary, &bin_dir).args(&args).spawn();
 
         match spawn_result {
             Ok(mut child) => {
                 monitor::push_event(&event_log, "[ADAPTER]",
                     format!("{display_name} started (pid {:?})", child.id()));
                 let stderr = child.stderr.take();
-                // Keep child alive while stderr streams
-                let _child = child;
-                stream_stderr(stderr, display_name, event_log.clone()).await;
+                let stdout = child.stdout.take();
+                let _child = child; // keep alive
+
+                tokio::join!(
+                    stream_output(stdout, display_name, event_log.clone()),
+                    stream_output(stderr, display_name, event_log.clone()),
+                );
+
                 monitor::push_event(&event_log, "[ADAPTER]",
                     format!("{display_name} process ended"));
             }
@@ -296,19 +297,31 @@ fn spawn_direct(
     });
 }
 
-async fn stream_stderr(
-    stderr: Option<tokio::process::ChildStderr>,
-    label: &str,
-    event_log: SharedEventLog,
-) {
+/// Stream either stdout or stderr to the event log, concurrently.
+async fn stream_output<R>(reader: Option<R>, label: &str, event_log: SharedEventLog)
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
     use tokio::io::AsyncBufReadExt;
-    if let Some(stderr) = stderr {
-        let mut lines = tokio::io::BufReader::new(stderr).lines();
+    if let Some(reader) = reader {
+        let mut lines = tokio::io::BufReader::new(reader).lines();
         while let Ok(Some(line)) = lines.next_line().await {
             let line = line.trim().to_string();
             if !line.is_empty() {
                 monitor::push_event(&event_log, "[ADAPTER]", format!("{label}: {line}"));
             }
         }
+    }
+}
+
+/// Human-readable descriptions for common Windows process exit codes.
+fn exit_code_description(code: i32) -> &'static str {
+    match code as u32 {
+        0xC0000135 => "STATUS_DLL_NOT_FOUND — a required DLL is missing from binaries/",
+        0xC0000139 => "STATUS_ENTRYPOINT_NOT_FOUND — DLL version mismatch (try: winget install Microsoft.VCRedist.2015+.x64)",
+        0xC0000005 => "STATUS_ACCESS_VIOLATION — crash/segfault",
+        0xC000007B => "STATUS_INVALID_IMAGE_FORMAT — wrong architecture (need x64)",
+        0 => "clean exit",
+        _ => "unknown",
     }
 }

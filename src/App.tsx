@@ -103,10 +103,8 @@ export default function App() {
         {tab === 'models' && (
           <ModelPanel
             activeModel={activeModel}
-            onModelLoaded={path => {
-              setActiveModel(path);
-              setTab('chat');
-            }}
+            onModelLoaded={path => { setActiveModel(path); setTab('chat'); }}
+            onModelCleared={() => { setActiveModel(''); refreshStatus(); }}
           />
         )}
       </main>

@@ -141,6 +141,31 @@ pub async fn download_required_models(
     Ok(())
 }
 
+/// Unload the current chat model: kills the server, clears config, returns to setup wizard.
+#[tauri::command]
+pub async fn clear_model(
+    config: State<'_, SharedConfig>,
+    chat_child: State<'_, SharedChatChild>,
+    app_handle: tauri::AppHandle,
+) -> CmdResult<()> {
+    // Kill the running chat server
+    {
+        let mut guard = chat_child.lock().await;
+        if let Some(mut child) = guard.take() {
+            let _ = child.kill().await;
+        }
+    }
+    // Clear from persisted config
+    {
+        let mut cfg = config.write().await;
+        cfg.chat_model = String::new();
+        if let Ok(config_path) = app_handle.path().app_config_dir() {
+            let _ = cfg.save(&config_path.join("config.json"));
+        }
+    }
+    Ok(())
+}
+
 // ── Chat ──────────────────────────────────────────────────────────────────────
 
 #[tauri::command]
