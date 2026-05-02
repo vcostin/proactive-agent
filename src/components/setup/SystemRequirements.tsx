@@ -104,18 +104,22 @@ export function SystemRequirements({ onChange }: Props) {
         {state === 'done' && deps && (
           <>
             {/* Visual C++ Runtime */}
+            {/* Show install/update whenever llama-server is failing — VCRedist may
+                be installed but outdated (missing newer exported functions). */}
             <Row
-              ok={deps.vcredist_ok}
+              ok={deps.vcredist_ok && deps.llama_server_ok}
               label="Visual C++ Runtime 2022"
               okNote="installed"
-              failNote="missing — required for llama-server"
-              action={!deps.vcredist_ok && !installing && !installDone ? (
+              failNote={deps.vcredist_ok
+                ? 'installed but outdated — needs update'
+                : 'not installed — required for llama-server'}
+              action={!deps.llama_server_ok && !installing && !installDone ? (
                 <button
                   className="primary"
                   onClick={handleInstallVCRedist}
                   style={{ fontSize: 11, padding: '2px 10px' }}
                 >
-                  install (~7 MB)
+                  {deps.vcredist_ok ? 'update (~7 MB)' : 'install (~7 MB)'}
                 </button>
               ) : undefined}
             />

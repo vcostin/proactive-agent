@@ -93,8 +93,10 @@ export function RequirementsBanner() {
                   }
                 }}
               />
-              <p style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 12 }}>
-                After installing, restart the app to reload all sidecar processes.
+              <p style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 12, lineHeight: 1.6 }}>
+                Click <strong style={{ color: 'var(--text)' }}>update (~7 MB)</strong> above
+                — this downloads and installs the latest Visual C++ runtime silently.
+                Then restart the app. That's it.
               </p>
             </div>
           </div>
