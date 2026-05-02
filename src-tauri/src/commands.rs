@@ -9,7 +9,7 @@ use tauri_plugin_dialog::DialogExt;
 use crate::monitor::{AudioState, MemoryStats, ModelInfo, SystemStatus};
 use crate::orchestrator::context::AssembledContext;
 use crate::monitor::SharedEventLog;
-use crate::{SharedConfig, SharedOrchestrator, SharedScheduler};
+use crate::{SharedChatChild, SharedConfig, SharedOrchestrator, SharedScheduler};
 
 type CmdResult<T> = Result<T, String>;
 
@@ -167,28 +167,42 @@ pub async fn send_message(
 
 /// Hot-swap the loaded chat model without restarting.
 /// `model_path` is the absolute path to the .gguf file.
-/// Does not touch the embedding model.
+/// Kills any running chat llama-server and starts a new one.
 #[tauri::command]
 pub async fn swap_model(
     config: State<'_, SharedConfig>,
     orchestrator: State<'_, SharedOrchestrator>,
+    event_log: State<'_, SharedEventLog>,
+    chat_child: State<'_, SharedChatChild>,
     app_handle: tauri::AppHandle,
     model_path: String,
 ) -> CmdResult<()> {
     let port = {
         let mut cfg = config.write().await;
         cfg.chat_model = model_path.clone();
-        // Persist so the selection survives a restart
         if let Ok(config_path) = app_handle.path().app_config_dir() {
             let _ = cfg.save(&config_path.join("config.json"));
         }
         cfg.llama_port
     };
-    let mut lock = orchestrator.lock().await;
-    if let Some(ref mut orch) = *lock {
-        // model_path is the full path — use it directly as the model id
-        orch.swap_adapter(port, &model_path);
+
+    // Update the in-memory adapter (points to the same port, new model id)
+    {
+        let mut lock = orchestrator.lock().await;
+        if let Some(ref mut orch) = *lock {
+            orch.swap_adapter(port, &model_path);
+        }
     }
+
+    // Start (or restart) the llama-server process with the new model
+    crate::start_chat_server(
+        &app_handle,
+        model_path,
+        port,
+        event_log.inner().clone(),
+        chat_child.inner().clone(),
+    );
+
     Ok(())
 }
 

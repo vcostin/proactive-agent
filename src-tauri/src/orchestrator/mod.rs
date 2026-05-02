@@ -78,14 +78,20 @@ impl Orchestrator {
             )
         };
 
-        // 1. Embed input
-        let embedding = self.memory.embedding.embed(&user_input).await?;
+        // 1. Embed input — best-effort: if the embed server is down, proceed without memory.
+        //    Chat still works; memory retrieval is silently skipped until the server is up.
+        let embedding = self.memory.embedding.embed(&user_input).await.ok();
 
-        // 2. Retrieve memories
-        let episodic =
-            self.memory.episodic.retrieve_similar(embedding.clone(), top_k_ep).await?;
-        let semantic =
-            self.memory.semantic.retrieve_relevant(embedding, top_k_sem).await?;
+        // 2. Retrieve memories (skipped when embedding unavailable)
+        let (episodic, semantic) = if let Some(ref emb) = embedding {
+            let ep = self.memory.episodic.retrieve_similar(emb.clone(), top_k_ep).await
+                .unwrap_or_default();
+            let sem = self.memory.semantic.retrieve_relevant(emb.clone(), top_k_sem).await
+                .unwrap_or_default();
+            (ep, sem)
+        } else {
+            (vec![], vec![])
+        };
 
         // 3. Assemble context
         let semantic_facts: Vec<String> = semantic.iter().map(|f| f.fact.clone()).collect();
@@ -116,29 +122,30 @@ impl Orchestrator {
         // 5. Parse <defer> tags
         let (clean, deferred) = parse_defer(&response.content);
 
-        // 6. Store both turns — low-signal turns get a lower importance score
-        let importance = importance_heuristic(&user_input);
-        let user_embed = self.memory.embedding.embed(&user_input).await?;
-        self.memory.episodic.store(
-            crate::memory::episodic::RawTurn {
-                session_id: self.session_id.clone(),
-                role: "user".to_string(),
-                content: user_input.clone(),
-                importance_score: importance,
-            },
-            user_embed,
-        ).await?;
-
-        let asst_embed = self.memory.embedding.embed(&clean).await?;
-        self.memory.episodic.store(
-            crate::memory::episodic::RawTurn {
-                session_id: self.session_id.clone(),
-                role: "assistant".to_string(),
-                content: clean.clone(),
-                importance_score: 0.7,
-            },
-            asst_embed,
-        ).await?;
+        // 6. Store both turns — best-effort, skipped when embed server is unavailable
+        if let Ok(user_embed) = self.memory.embedding.embed(&user_input).await {
+            let importance = importance_heuristic(&user_input);
+            let _ = self.memory.episodic.store(
+                crate::memory::episodic::RawTurn {
+                    session_id: self.session_id.clone(),
+                    role: "user".to_string(),
+                    content: user_input.clone(),
+                    importance_score: importance,
+                },
+                user_embed,
+            ).await;
+        }
+        if let Ok(asst_embed) = self.memory.embedding.embed(&clean).await {
+            let _ = self.memory.episodic.store(
+                crate::memory::episodic::RawTurn {
+                    session_id: self.session_id.clone(),
+                    role: "assistant".to_string(),
+                    content: clean.clone(),
+                    importance_score: 0.7,
+                },
+                asst_embed,
+            ).await;
+        }
 
         // 7. Update recent-turns window
         self.recent_turns.push(Turn { role: "user".to_string(), content: user_input });

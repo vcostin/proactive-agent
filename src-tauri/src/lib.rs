@@ -17,6 +17,7 @@ use tokio::sync::{Mutex, RwLock};
 pub type SharedConfig = Arc<RwLock<AppConfig>>;
 pub type SharedOrchestrator = Arc<Mutex<Option<Orchestrator>>>;
 pub type SharedScheduler = Arc<Mutex<ProactivityScheduler>>;
+pub type SharedChatChild = Arc<Mutex<Option<tauri_plugin_shell::process::CommandChild>>>;
 
 pub fn run() {
     tauri::Builder::default()
@@ -48,11 +49,13 @@ pub fn run() {
             let scheduler: SharedScheduler =
                 Arc::new(Mutex::new(ProactivityScheduler::new()));
             let event_log: SharedEventLog = new_event_log();
+            let chat_child: SharedChatChild = Arc::new(Mutex::new(None));
 
             app.manage(config.clone());
             app.manage(orchestrator.clone());
             app.manage(scheduler.clone());
             app.manage(event_log.clone());
+            app.manage(chat_child.clone());
 
             // ── Sidecar processes ─────────────────────────────────────────────
             spawn_sidecars(app.handle().clone(), config.clone(), event_log.clone());
@@ -110,6 +113,74 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+/// Start (or restart) the chat llama-server with a new model path.
+/// Kills any previously running instance first, waits for the port to free,
+/// then spawns the new process. Safe to call from `swap_model`.
+pub fn start_chat_server(
+    app_handle: &tauri::AppHandle,
+    model_path: String,
+    port: u16,
+    event_log: SharedEventLog,
+    chat_child: SharedChatChild,
+) {
+    let app_handle = app_handle.clone();
+    tauri::async_runtime::spawn(async move {
+        // Kill old process, releasing the port
+        {
+            let mut guard = chat_child.lock().await;
+            if let Some(old) = guard.take() {
+                let _ = old.kill();
+            }
+        } // guard dropped before await
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+        let result = app_handle
+            .shell()
+            .sidecar("llama-server")
+            .and_then(|cmd| {
+                cmd.args([
+                    "--model", &model_path,
+                    "--port", &port.to_string(),
+                    "--host", "127.0.0.1",
+                    "--ctx-size", "4096",
+                    "-ngl", "999",
+                ])
+                .spawn()
+            });
+
+        match result {
+            Ok((mut rx, child)) => {
+                monitor::push_event(&event_log, "[ADAPTER]", "llama (chat) started");
+                {
+                    let mut guard = chat_child.lock().await;
+                    *guard = Some(child);
+                } // guard dropped before event loop
+                while let Some(event) = rx.recv().await {
+                    match event {
+                        CommandEvent::Stderr(b) => {
+                            let t = String::from_utf8_lossy(&b).trim().to_string();
+                            if !t.is_empty() {
+                                monitor::push_event(&event_log, "[ADAPTER]", format!("llama (chat): {t}"));
+                            }
+                        }
+                        CommandEvent::Error(e) => {
+                            monitor::push_event(&event_log, "[ADAPTER]", format!("llama (chat) error: {e}"));
+                        }
+                        CommandEvent::Terminated(s) => {
+                            monitor::push_event(&event_log, "[ADAPTER]", format!("llama (chat) exited (code {:?})", s.code));
+                            break;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            Err(e) => {
+                monitor::push_event(&event_log, "[ADAPTER]", format!("llama (chat) not started: {e}"));
+            }
+        }
+    });
 }
 
 fn spawn_sidecars(

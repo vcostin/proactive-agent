@@ -58,11 +58,13 @@ $tmpZip = "$env:TEMP\llama.zip"
 Download-File $llamaAsset.browser_download_url $tmpZip
 $llamaExe = Expand-And-Find $tmpZip "$env:TEMP\llama-extract" "llama-server.exe"
 
-# Copy binary + all DLLs (Vulkan runtime, ggml backends, etc.)
+# Copy binary + ALL DLLs found anywhere in the extracted zip (recursive)
+# Some releases nest DLLs in subdirectories
 Copy-Item $llamaExe.FullName "$BinDir\llama-server-x86_64-pc-windows-msvc.exe" -Force
-Get-ChildItem $llamaExe.Directory -Filter "*.dll" |
-    ForEach-Object { Copy-Item $_.FullName $BinDir -Force }
-Write-Host "  OK llama-server.exe + DLLs"
+$dllCount = 0
+Get-ChildItem "$env:TEMP\llama-extract" -Recurse -Filter "*.dll" |
+    ForEach-Object { Copy-Item $_.FullName $BinDir -Force; $dllCount++ }
+Write-Host "  OK llama-server.exe + $dllCount DLLs"
 
 # ─── 2. whisper-server ────────────────────────────────────────────────────────
 Write-Host "`n[2/4] whisper.cpp (Windows x64)"
@@ -89,9 +91,10 @@ if (-not $whisperAsset) {
     Download-File $whisperAsset.browser_download_url $tmpWZip
     $whisperExe = Expand-And-Find $tmpWZip "$env:TEMP\whisper-extract" "whisper-server.exe"
     Copy-Item $whisperExe.FullName "$BinDir\whisper-server-x86_64-pc-windows-msvc.exe" -Force
-    Get-ChildItem $whisperExe.Directory -Filter "*.dll" |
-        ForEach-Object { Copy-Item $_.FullName $BinDir -Force }
-    Write-Host "  OK whisper-server.exe + DLLs"
+    $wDllCount = 0
+    Get-ChildItem "$env:TEMP\whisper-extract" -Recurse -Filter "*.dll" |
+        ForEach-Object { Copy-Item $_.FullName $BinDir -Force; $wDllCount++ }
+    Write-Host "  OK whisper-server.exe + $wDllCount DLLs"
 }
 
 # ─── 3. Models ────────────────────────────────────────────────────────────────
