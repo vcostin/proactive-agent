@@ -150,9 +150,12 @@ pub fn sidecar_filename(name: &str) -> String {
 pub fn find_sidecar(name: &str) -> Option<PathBuf> {
     let filename = sidecar_filename(name);
     let root = binaries_dir();
+    // The short name is the first segment: "llama-server" → "llama", "whisper-server" → "whisper"
+    let short = name.split('-').next().unwrap_or(name);
     [
-        root.join(name).join(&filename),
-        root.join(&filename),
+        root.join(name).join(&filename),    // binaries/llama-server/llama-server-...exe
+        root.join(short).join(&filename),   // binaries/llama/llama-server-...exe  ← current layout
+        root.join(&filename),               // binaries/llama-server-...exe  (legacy)
     ]
     .into_iter()
     .find(|p| p.exists() && p.metadata().map(|m| m.len() > 1024).unwrap_or(false))
