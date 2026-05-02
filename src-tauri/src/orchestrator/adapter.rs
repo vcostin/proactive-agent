@@ -2,6 +2,8 @@ use anyhow::Result;
 use async_trait::async_trait;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+use tokio::sync::RwLock;
 
 use super::context::{AssembledContext, Message};
 
@@ -22,19 +24,59 @@ pub trait ModelAdapter: Send + Sync {
 pub struct LlamaCppAdapter {
     client: Client,
     base_url: String,
-    model: String,
+    /// Fallback alias (passed via --alias when starting the server).
+    fallback_alias: String,
+    /// Discovered model ID from GET /v1/models — cached after first successful query.
+    discovered_id: Arc<RwLock<Option<String>>>,
 }
 
 impl LlamaCppAdapter {
-    /// `model_alias` must match the `--alias` flag passed to llama-server.
-    /// We use "llama-chat" for the chat server so the ID is always predictable
-    /// regardless of what model file is loaded.
-    pub fn new(port: u16, model_alias: impl Into<String>) -> Self {
+    pub fn new(port: u16, fallback_alias: impl Into<String>) -> Self {
         Self {
             client: Client::new(),
             base_url: format!("http://127.0.0.1:{port}"),
-            model: model_alias.into(),
+            fallback_alias: fallback_alias.into(),
+            discovered_id: Arc::new(RwLock::new(None)),
         }
+    }
+
+    /// Query GET /v1/models and return the first model ID the server reports.
+    /// Caches the result so subsequent calls are instant.
+    /// Falls back to the configured alias if the query fails.
+    async fn resolve_model_id(&self) -> String {
+        // Fast path: return cached ID
+        if let Some(ref id) = *self.discovered_id.read().await {
+            return id.clone();
+        }
+
+        // Query the server for its actual model list
+        #[derive(Deserialize)]
+        struct ModelsResp { data: Vec<ModelEntry> }
+        #[derive(Deserialize)]
+        struct ModelEntry { id: String }
+
+        let discovered = self.client
+            .get(format!("{}/v1/models", self.base_url))
+            .timeout(std::time::Duration::from_secs(3))
+            .send()
+            .await
+            .ok()
+            .and_then(|r| r.error_for_status().ok())
+            .and_then(|r| {
+                // Parse synchronously from bytes to avoid nested async
+                tokio::task::block_in_place(|| {
+                    futures::executor::block_on(r.json::<ModelsResp>()).ok()
+                })
+            })
+            .and_then(|m| m.data.into_iter().next())
+            .map(|m| m.id);
+
+        if let Some(ref id) = discovered {
+            *self.discovered_id.write().await = Some(id.clone());
+            return id.clone();
+        }
+
+        self.fallback_alias.clone()
     }
 }
 
@@ -51,7 +93,6 @@ struct ChatRequest<'a> {
 struct ChatResponse {
     choices: Vec<ChatChoice>,
     usage: Option<Usage>,
-    /// llama.cpp-specific timing block — not part of the OpenAI spec
     timings: Option<Timings>,
 }
 
@@ -81,8 +122,10 @@ struct Timings {
 #[async_trait]
 impl ModelAdapter for LlamaCppAdapter {
     async fn complete(&self, context: AssembledContext) -> Result<ModelResponse> {
+        let model_id = self.resolve_model_id().await;
+
         let req = ChatRequest {
-            model: &self.model,
+            model: &model_id,
             messages: context.to_messages(),
             stream: false,
         };
@@ -114,6 +157,6 @@ impl ModelAdapter for LlamaCppAdapter {
     }
 
     fn model_id(&self) -> &str {
-        &self.model
+        &self.fallback_alias
     }
 }
