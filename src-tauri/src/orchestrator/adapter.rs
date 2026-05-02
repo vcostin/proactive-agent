@@ -54,20 +54,17 @@ impl LlamaCppAdapter {
         let resp = self
             .client
             .get(format!("{}/v1/models", self.base_url))
-            .timeout(std::time::Duration::from_secs(3))
+            .timeout(std::time::Duration::from_secs(10))
             .send()
             .await
             .ok()?
             .error_for_status()
             .ok()?;
 
-        resp.json::<ModelsResp>()
-            .await
-            .ok()?
-            .data
-            .into_iter()
-            .next()
-            .map(|m| m.id)
+        let models = resp.json::<ModelsResp>().await.ok()?;
+        let id = models.data.into_iter().next().map(|m| m.id)?;
+        eprintln!("[ADAPTER] /v1/models → discovered model id: '{id}'");
+        Some(id)
     }
 
     /// Return the model ID to use in API calls — cached after the first query.
@@ -141,15 +138,29 @@ impl ModelAdapter for LlamaCppAdapter {
             stream: false,
         };
 
-        let resp: ChatResponse = self
+        eprintln!("[ADAPTER] POST /v1/chat/completions with model='{model_id}'");
+
+        let raw = self
             .client
             .post(format!("{}/v1/chat/completions", self.base_url))
             .json(&req)
             .send()
-            .await?
-            .error_for_status()?
-            .json()
             .await?;
+
+        if !raw.status().is_success() {
+            let status = raw.status();
+            let body = raw.text().await.unwrap_or_else(|_| "<empty>".to_string());
+            // Reset cache so we re-discover on next attempt
+            *self.discovered_id.write().await = None;
+            return Err(anyhow::anyhow!(
+                "model='{}' → {} — server said: {}",
+                model_id,
+                status,
+                body.chars().take(300).collect::<String>()
+            ));
+        }
+
+        let resp: ChatResponse = raw.json().await?;
 
         let content = resp
             .choices
