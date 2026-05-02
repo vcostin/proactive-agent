@@ -39,11 +39,23 @@ pub struct AppConfig {
 impl AppConfig {
     /// Initialise with proper OS-level data directories.
     /// `data_dir` comes from `app_handle.path().app_data_dir()`.
+    ///
+    /// In debug builds we use paths relative to the working directory
+    /// so that `npm run setup` models are found immediately without
+    /// running the in-app download wizard.
     pub fn with_data_dir(data_dir: PathBuf) -> Self {
+        #[cfg(debug_assertions)]
+        let (models_dir, db_path) = {
+            let cwd = std::env::current_dir().unwrap_or_else(|_| data_dir.clone());
+            (cwd.join("models"), cwd.join("data").join("memory"))
+        };
+        #[cfg(not(debug_assertions))]
+        let (models_dir, db_path) = (data_dir.join("models"), data_dir.join("memory"));
+
         Self {
             chat_model: String::new(),
-            models_dir: data_dir.join("models"),
-            db_path: data_dir.join("memory"),
+            models_dir,
+            db_path,
             llama_port: 8080,
             embed_port: 8081,
             whisper_port: 8082,

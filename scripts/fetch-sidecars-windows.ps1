@@ -69,8 +69,16 @@ Write-Host "`n[2/4] whisper.cpp (Windows x64)"
 $whisperRelease = Get-LatestRelease "ggerganov/whisper.cpp"
 Write-Host "      Release: $($whisperRelease.tag_name)"
 
+# whisper.cpp naming has varied across releases:
+#   older: whisper-bin-win-x64.zip
+#   newer: whisper-bin-x64.zip  (no "win" prefix)
+#   CUDA:  whisper-cublas-*-bin-x64.zip (skip — we want CPU/default build)
 $whisperAsset = $whisperRelease.assets |
-    Where-Object { $_.name -match "win.*x64.*\.zip$" -and $_.name -notmatch "coreml|xcfr" } |
+    Where-Object {
+        $_.name -match "x64.*\.zip$" -and
+        $_.name -notmatch "coreml|xcfr|cublas|metal|ios|android|arm"
+    } |
+    Sort-Object { ($_.name -match "vulkan") } -Descending |   # prefer Vulkan if present
     Select-Object -First 1
 
 if (-not $whisperAsset) {

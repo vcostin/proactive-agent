@@ -10,8 +10,9 @@ src-tauri/gen/
 binaries/*
 !binaries/.gitkeep
 
-# Local DB data
+# Local DB data and downloaded models (populated at runtime, never committed)
 data/
+models/
 
 # Machine-local cargo config (contains hardcoded protoc path)
 src-tauri/.cargo/config.toml
