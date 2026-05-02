@@ -3,21 +3,32 @@ use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
+    /// Absolute path to the currently loaded chat model (.gguf).
+    /// Empty = no model selected yet (triggers the setup wizard).
+    pub chat_model: String,
+
+    /// Directory where auto-downloaded models are stored
+    /// (nomic-embed-text, whisper). Defaults to <app_data>/models.
     pub models_dir: PathBuf,
+
+    /// Directory where LanceDB memory is stored. Defaults to <app_data>/memory.
     pub db_path: PathBuf,
+
     pub llama_port: u16,
     pub embed_port: u16,
     pub whisper_port: u16,
     pub kokoro_port: u16,
-    /// None means cpal picks the system default
+
+    /// None means cpal picks the system default.
     pub audio_device: Option<String>,
-    pub chat_model: String,
-    /// Fixed to nomic-embed-text — never changed at runtime
+
+    /// Logical name passed to the embeddings API — never changed.
     pub embed_model: String,
-    /// Filename of the nomic-embed-text GGUF in models_dir
+    /// Filename of the nomic-embed-text GGUF inside models_dir.
     pub embed_model_file: String,
-    /// Filename of the Whisper GGUF/bin in models_dir
+    /// Filename of the Whisper model inside models_dir.
     pub whisper_model_file: String,
+
     pub persona_prompt: String,
     pub context_window_tokens: usize,
     pub top_k_episodic: usize,
@@ -25,30 +36,66 @@ pub struct AppConfig {
     pub recent_turns_window: usize,
 }
 
-impl Default for AppConfig {
-    fn default() -> Self {
+impl AppConfig {
+    /// Initialise with proper OS-level data directories.
+    /// `data_dir` comes from `app_handle.path().app_data_dir()`.
+    pub fn with_data_dir(data_dir: PathBuf) -> Self {
         Self {
-            models_dir: PathBuf::from("models"),
-            db_path: PathBuf::from("data/memory"),
+            chat_model: String::new(),
+            models_dir: data_dir.join("models"),
+            db_path: data_dir.join("memory"),
             llama_port: 8080,
             embed_port: 8081,
             whisper_port: 8082,
             kokoro_port: 8083,
             audio_device: None,
-            chat_model: String::new(),
             embed_model: "nomic-embed-text".to_string(),
             embed_model_file: "nomic-embed-text-v1.5.Q8_0.gguf".to_string(),
             whisper_model_file: "ggml-base.en.bin".to_string(),
             persona_prompt: concat!(
                 "You are a helpful, proactive assistant with persistent memory. ",
-                "You may schedule follow-up messages by emitting a <defer> tag at the end of ",
-                "your response: <defer>{\"message\":\"...\",\"after_minutes\":N,\"trigger\":\"...\"}</defer>",
-            )
-            .to_string(),
+                "You may schedule follow-up messages by emitting a <defer> tag at the end ",
+                "of your response: ",
+                "<defer>{\"message\":\"...\",\"after_minutes\":N,\"trigger\":\"...\"}</defer>",
+            ).to_string(),
             context_window_tokens: 4096,
             top_k_episodic: 5,
             top_k_semantic: 5,
             recent_turns_window: 10,
         }
+    }
+
+    /// Load persisted config from `config_path`, falling back to defaults
+    /// seeded with `data_dir` if the file is missing or unreadable.
+    pub fn load(config_path: &std::path::Path, data_dir: PathBuf) -> Self {
+        if let Ok(text) = std::fs::read_to_string(config_path) {
+            if let Ok(cfg) = serde_json::from_str::<AppConfig>(&text) {
+                return cfg;
+            }
+        }
+        Self::with_data_dir(data_dir)
+    }
+
+    /// Persist to disk so settings survive restarts.
+    pub fn save(&self, config_path: &std::path::Path) -> anyhow::Result<()> {
+        if let Some(parent) = config_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(config_path, serde_json::to_string_pretty(self)?)?;
+        Ok(())
+    }
+
+    /// True when the app has enough to be usable (chat model + required models present).
+    pub fn is_ready(&self) -> bool {
+        !self.chat_model.is_empty()
+            && std::path::Path::new(&self.chat_model).exists()
+    }
+
+    pub fn embed_model_path(&self) -> PathBuf {
+        self.models_dir.join(&self.embed_model_file)
+    }
+
+    pub fn whisper_model_path(&self) -> PathBuf {
+        self.models_dir.join(&self.whisper_model_file)
     }
 }

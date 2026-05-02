@@ -1,7 +1,10 @@
 use std::collections::HashMap;
 
 use chrono::Utc;
-use tauri::{Emitter, State};
+use futures::StreamExt;
+use serde::Serialize;
+use tauri::{Emitter, Manager, State};
+use tauri_plugin_dialog::DialogExt;
 
 use crate::monitor::{AudioState, MemoryStats, ModelInfo, SystemStatus};
 use crate::orchestrator::context::AssembledContext;
@@ -12,6 +15,130 @@ type CmdResult<T> = Result<T, String>;
 
 fn to_cmd_err(e: impl std::fmt::Display) -> String {
     e.to_string()
+}
+
+// ── Setup / first-run ────────────────────────────────────────────────────────
+
+#[derive(Serialize)]
+pub struct SetupStatus {
+    pub ready: bool,
+    pub chat_model: String,
+    pub embed_model_ready: bool,
+    pub whisper_model_ready: bool,
+    pub data_dir: String,
+}
+
+#[derive(Clone, Serialize)]
+pub struct DownloadProgress {
+    pub filename: String,
+    pub downloaded: u64,
+    pub total: u64,
+    pub done: bool,
+}
+
+/// Returns current setup state — drives the first-run wizard.
+#[tauri::command]
+pub async fn get_setup_status(config: State<'_, SharedConfig>) -> CmdResult<SetupStatus> {
+    let cfg = config.read().await;
+    Ok(SetupStatus {
+        ready: cfg.is_ready(),
+        chat_model: cfg.chat_model.clone(),
+        embed_model_ready: cfg.embed_model_path().exists(),
+        whisper_model_ready: cfg.whisper_model_path().exists(),
+        data_dir: cfg.models_dir
+            .parent()
+            .unwrap_or(&cfg.models_dir)
+            .to_string_lossy()
+            .into_owned(),
+    })
+}
+
+/// Open a native file-picker filtered to .gguf files.
+/// Returns the absolute path the user chose, or null if they cancelled.
+#[tauri::command]
+pub async fn pick_model_file(app_handle: tauri::AppHandle) -> CmdResult<Option<String>> {
+    // The blocking dialog call must run outside the async executor
+    let path = tokio::task::spawn_blocking(move || {
+        app_handle
+            .dialog()
+            .file()
+            .add_filter("GGUF Model", &["gguf"])
+            .blocking_pick_file()
+    })
+    .await
+    .map_err(to_cmd_err)?;
+
+    Ok(path.map(|p| p.to_string()))
+}
+
+/// Download the two required fixed models (nomic-embed-text + whisper-base-en)
+/// into the app data models directory. Emits `download_progress` events.
+#[tauri::command]
+pub async fn download_required_models(
+    config: State<'_, SharedConfig>,
+    app_handle: tauri::AppHandle,
+) -> CmdResult<()> {
+    let (models_dir, embed_path, whisper_path) = {
+        let cfg = config.read().await;
+        (cfg.models_dir.clone(), cfg.embed_model_path(), cfg.whisper_model_path())
+    };
+
+    std::fs::create_dir_all(&models_dir).map_err(to_cmd_err)?;
+
+    let downloads: &[(&str, &str, &std::path::Path)] = &[
+        (
+            "nomic-embed-text-v1.5.Q8_0.gguf",
+            "https://huggingface.co/nomic-ai/nomic-embed-text-v1.5-GGUF/resolve/main/nomic-embed-text-v1.5.Q8_0.gguf",
+            &embed_path,
+        ),
+        (
+            "ggml-base.en.bin",
+            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin",
+            &whisper_path,
+        ),
+    ];
+
+    let client = reqwest::Client::new();
+
+    for (filename, url, dest) in downloads {
+        if dest.exists() {
+            let _ = app_handle.emit("download_progress", DownloadProgress {
+                filename: filename.to_string(),
+                downloaded: dest.metadata().map(|m| m.len()).unwrap_or(0),
+                total: dest.metadata().map(|m| m.len()).unwrap_or(0),
+                done: true,
+            });
+            continue;
+        }
+
+        let resp = client.get(*url).send().await.map_err(to_cmd_err)?;
+        let total = resp.content_length().unwrap_or(0);
+        let mut downloaded = 0u64;
+
+        let mut stream = resp.bytes_stream();
+        let mut file = tokio::fs::File::create(dest).await.map_err(to_cmd_err)?;
+
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(to_cmd_err)?;
+            tokio::io::AsyncWriteExt::write_all(&mut file, &chunk).await.map_err(to_cmd_err)?;
+            downloaded += chunk.len() as u64;
+            let _ = app_handle.emit("download_progress", DownloadProgress {
+                filename: filename.to_string(),
+                downloaded,
+                total,
+                done: false,
+            });
+        }
+
+        let _ = app_handle.emit("download_progress", DownloadProgress {
+            filename: filename.to_string(),
+            downloaded,
+            total,
+            done: true,
+        });
+    }
+
+    Ok(())
 }
 
 // ── Chat ──────────────────────────────────────────────────────────────────────
@@ -39,18 +166,28 @@ pub async fn send_message(
 }
 
 /// Hot-swap the loaded chat model without restarting.
+/// `model_path` is the absolute path to the .gguf file.
 /// Does not touch the embedding model.
 #[tauri::command]
 pub async fn swap_model(
     config: State<'_, SharedConfig>,
     orchestrator: State<'_, SharedOrchestrator>,
-    model_filename: String,
+    app_handle: tauri::AppHandle,
+    model_path: String,
 ) -> CmdResult<()> {
-    let port = config.read().await.llama_port;
+    let port = {
+        let mut cfg = config.write().await;
+        cfg.chat_model = model_path.clone();
+        // Persist so the selection survives a restart
+        if let Ok(config_path) = app_handle.path().app_config_dir() {
+            let _ = cfg.save(&config_path.join("config.json"));
+        }
+        cfg.llama_port
+    };
     let mut lock = orchestrator.lock().await;
     if let Some(ref mut orch) = *lock {
-        orch.swap_adapter(port, &model_filename);
-        config.write().await.chat_model = model_filename;
+        // model_path is the full path — use it directly as the model id
+        orch.swap_adapter(port, &model_path);
     }
     Ok(())
 }
@@ -158,7 +295,38 @@ pub async fn fire_deferred_now(
 
 #[tauri::command]
 pub async fn list_models(config: State<'_, SharedConfig>) -> CmdResult<Vec<ModelInfo>> {
-    let models_dir = config.read().await.models_dir.clone();
+    let (models_dir, active_model) = {
+        let cfg = config.read().await;
+        (cfg.models_dir.clone(), cfg.chat_model.clone())
+    };
+
+    // Always include the currently active model even if it's outside models_dir
+    let mut extra: Vec<ModelInfo> = vec![];
+    if !active_model.is_empty() {
+        let p = std::path::Path::new(&active_model);
+        if p.exists() && p.parent() != Some(&models_dir) {
+            let meta = std::fs::metadata(p).ok();
+            let (quant, param) = ModelInfo::parse_filename(
+                p.file_name().and_then(|n| n.to_str()).unwrap_or(""),
+            );
+            extra.push(ModelInfo {
+                filename: active_model.clone(),
+                quant_type: quant,
+                param_count: param,
+                file_size_bytes: meta.as_ref().map(|m| m.len()).unwrap_or(0),
+                last_modified: meta
+                    .and_then(|m| m.modified().ok())
+                    .map(|t| {
+                        let secs = t.duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default().as_secs();
+                        chrono::DateTime::from_timestamp(secs as i64, 0).unwrap_or_default()
+                    })
+                    .unwrap_or_default(),
+            });
+        }
+    }
+
+    let models_dir = models_dir;
 
     if !models_dir.exists() {
         return Ok(vec![]);
@@ -194,6 +362,7 @@ pub async fn list_models(config: State<'_, SharedConfig>) -> CmdResult<Vec<Model
     }
 
     models.sort_by(|a, b| a.filename.cmp(&b.filename));
+    models.extend(extra);
     Ok(models)
 }
 

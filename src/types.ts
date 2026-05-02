@@ -1,5 +1,21 @@
 // Mirror types for the Rust structs exposed via Tauri commands.
 
+export interface SetupStatus {
+  ready: boolean;
+  chat_model: string;
+  embed_model_ready: boolean;
+  whisper_model_ready: boolean;
+  data_dir: string;
+}
+
+export interface DownloadProgress {
+  filename: string;
+  downloaded: number;
+  total: number;
+  done: boolean;
+}
+
+
 export interface ModelInfo {
   filename: string;
   quant_type: string;

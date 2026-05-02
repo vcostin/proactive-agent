@@ -21,10 +21,29 @@ pub type SharedScheduler = Arc<Mutex<ProactivityScheduler>>;
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let app_handle = app.handle().clone();
 
-            let config: SharedConfig = Arc::new(RwLock::new(AppConfig::default()));
+            // ── Resolve OS-appropriate data directory ─────────────────────────
+            let data_dir = app.path()
+                .app_data_dir()
+                .expect("cannot resolve app data dir");
+            let config_path = app.path()
+                .app_config_dir()
+                .expect("cannot resolve app config dir")
+                .join("config.json");
+
+            std::fs::create_dir_all(&data_dir).ok();
+
+            // Load persisted config (or defaults seeded with data_dir)
+            let cfg = AppConfig::load(&config_path, data_dir);
+
+            // Ensure model/db directories exist
+            std::fs::create_dir_all(&cfg.models_dir).ok();
+            std::fs::create_dir_all(&cfg.db_path).ok();
+
+            let config: SharedConfig = Arc::new(RwLock::new(cfg));
             let orchestrator: SharedOrchestrator = Arc::new(Mutex::new(None));
             let scheduler: SharedScheduler =
                 Arc::new(Mutex::new(ProactivityScheduler::new()));
@@ -77,6 +96,9 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::get_setup_status,
+            commands::pick_model_file,
+            commands::download_required_models,
             commands::send_message,
             commands::swap_model,
             commands::get_memories,
@@ -90,10 +112,6 @@ pub fn run() {
         .expect("error while running tauri application");
 }
 
-/// Spawn all four sidecar processes.
-/// Each process is kept alive by a dedicated tokio task that consumes its event stream.
-/// Missing binaries are skipped gracefully — the app still runs, sidecars will show red in
-/// the debug panel until the binary is present.
 fn spawn_sidecars(
     app_handle: tauri::AppHandle,
     config: SharedConfig,
@@ -101,44 +119,36 @@ fn spawn_sidecars(
 ) {
     tauri::async_runtime::spawn(async move {
         let cfg = config.read().await;
-        let models_dir = cfg.models_dir.to_str().unwrap_or("models").to_string();
         let chat_model     = cfg.chat_model.clone();
-        let embed_file     = cfg.embed_model_file.clone();
-        let whisper_file   = cfg.whisper_model_file.clone();
+        let embed_path     = cfg.embed_model_path().to_string_lossy().into_owned();
+        let whisper_path   = cfg.whisper_model_path().to_string_lossy().into_owned();
         let llama_port     = cfg.llama_port.to_string();
         let embed_port     = cfg.embed_port.to_string();
         let whisper_port   = cfg.whisper_port.to_string();
         let kokoro_port    = cfg.kokoro_port.to_string();
         drop(cfg);
 
-        // ── llama-server: chat model ──────────────────────────────────────────
         if chat_model.is_empty() {
-            monitor::push_event(&event_log, "[ADAPTER]", "chat_model not set — llama-server (chat) not started");
+            monitor::push_event(&event_log, "[ADAPTER]", "chat model not configured — llama-server (chat) not started");
         } else {
-            let model_path = format!("{models_dir}/{chat_model}");
             spawn_one(
                 &app_handle, &event_log, "llama-server", "llama (chat)",
-                &["--model", &model_path, "--port", &llama_port,
+                &["--model", &chat_model, "--port", &llama_port,
                   "--host", "127.0.0.1", "--ctx-size", "4096", "-ngl", "999"],
             );
         }
 
-        // ── llama-server: embedding model ─────────────────────────────────────
-        let embed_path = format!("{models_dir}/{embed_file}");
         spawn_one(
             &app_handle, &event_log, "llama-server", "llama (embed)",
             &["--model", &embed_path, "--port", &embed_port,
               "--host", "127.0.0.1", "--ctx-size", "512", "-ngl", "999", "--embedding"],
         );
 
-        // ── whisper-server ────────────────────────────────────────────────────
-        let whisper_path = format!("{models_dir}/{whisper_file}");
         spawn_one(
             &app_handle, &event_log, "whisper-server", "whisper",
             &["-m", &whisper_path, "--port", &whisper_port, "--host", "127.0.0.1"],
         );
 
-        // ── kokoro-server ─────────────────────────────────────────────────────
         spawn_one(
             &app_handle, &event_log, "kokoro-server", "kokoro",
             &["--port", &kokoro_port, "--host", "127.0.0.1"],
@@ -161,35 +171,22 @@ fn spawn_one(
     match result {
         Ok((mut rx, child)) => {
             monitor::push_event(event_log, "[ADAPTER]", format!("{display_name} started"));
-            // Keep the child alive and forward its stderr to the event log
             let log = event_log.clone();
             tauri::async_runtime::spawn(async move {
-                let _child = child; // drop = kill; keep alive until stream closes
+                let _child = child;
                 while let Some(event) = rx.recv().await {
                     match event {
                         CommandEvent::Stderr(line) => {
                             let text = String::from_utf8_lossy(&line).trim().to_string();
                             if !text.is_empty() {
-                                monitor::push_event(
-                                    &log,
-                                    "[ADAPTER]",
-                                    format!("{display_name}: {text}"),
-                                );
+                                monitor::push_event(&log, "[ADAPTER]", format!("{display_name}: {text}"));
                             }
                         }
                         CommandEvent::Error(e) => {
-                            monitor::push_event(
-                                &log,
-                                "[ADAPTER]",
-                                format!("{display_name} error: {e}"),
-                            );
+                            monitor::push_event(&log, "[ADAPTER]", format!("{display_name} error: {e}"));
                         }
-                        CommandEvent::Terminated(status) => {
-                            monitor::push_event(
-                                &log,
-                                "[ADAPTER]",
-                                format!("{display_name} exited: code {:?}", status.code),
-                            );
+                        CommandEvent::Terminated(s) => {
+                            monitor::push_event(&log, "[ADAPTER]", format!("{display_name} exited (code {:?})", s.code));
                             break;
                         }
                         _ => {}
@@ -198,12 +195,7 @@ fn spawn_one(
             });
         }
         Err(e) => {
-            // Binary missing or not registered — non-fatal during development
-            monitor::push_event(
-                event_log,
-                "[ADAPTER]",
-                format!("{display_name} not started: {e}"),
-            );
+            monitor::push_event(event_log, "[ADAPTER]", format!("{display_name} not started: {e}"));
         }
     }
 }

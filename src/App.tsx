@@ -1,14 +1,56 @@
-import { useState } from 'react';
+import { invoke } from '@tauri-apps/api/core';
+import { useEffect, useState } from 'react';
 import { ChatWindow } from './components/chat/ChatWindow';
 import { DebugPanel } from './components/debug/DebugPanel';
 import { ModelPanel } from './components/models/ModelPanel';
+import { SetupWizard } from './components/setup/SetupWizard';
+import { SetupStatus } from './types';
 
 type Tab = 'chat' | 'debug' | 'models';
 
 export default function App() {
+  const [setupStatus, setSetupStatus] = useState<SetupStatus | null>(null);
   const [tab, setTab] = useState<Tab>('chat');
   const [activeModel, setActiveModel] = useState('');
 
+  // Check setup on mount and whenever the window gains focus (catches
+  // the case where the user downloads a model while the wizard is open)
+  const refreshStatus = () => {
+    invoke<SetupStatus>('get_setup_status').then(s => {
+      setSetupStatus(s);
+      if (s.chat_model) setActiveModel(s.chat_model);
+    });
+  };
+
+  useEffect(() => {
+    refreshStatus();
+    window.addEventListener('focus', refreshStatus);
+    return () => window.removeEventListener('focus', refreshStatus);
+  }, []);
+
+  const handleSetupComplete = (modelPath: string) => {
+    setActiveModel(modelPath);
+    refreshStatus();
+  };
+
+  // Still loading
+  if (setupStatus === null) {
+    return (
+      <div style={{
+        height: '100vh', display: 'flex', alignItems: 'center',
+        justifyContent: 'center', color: 'var(--text-muted)', fontSize: 12,
+      }}>
+        starting…
+      </div>
+    );
+  }
+
+  // First run or no model selected
+  if (!setupStatus.ready) {
+    return <SetupWizard status={setupStatus} onComplete={handleSetupComplete} />;
+  }
+
+  // Main app
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
 
@@ -32,13 +74,28 @@ export default function App() {
             {t}
           </button>
         ))}
+
+        {/* Active model pill */}
+        {activeModel && (
+          <button
+            onClick={() => setTab('models')}
+            style={{
+              marginLeft: 'auto', fontSize: 10, padding: '2px 10px',
+              color: 'var(--text-muted)', maxWidth: 260,
+              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            }}
+            title={activeModel}
+          >
+            {modelBasename(activeModel)}
+          </button>
+        )}
       </nav>
 
       {/* ── Content ── */}
       <main style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
         {tab === 'chat' && (
           <ChatWindow
-            modelName={activeModel}
+            modelName={modelBasename(activeModel)}
             onModelClick={() => setTab('models')}
           />
         )}
@@ -46,7 +103,10 @@ export default function App() {
         {tab === 'models' && (
           <ModelPanel
             activeModel={activeModel}
-            onModelLoaded={name => { setActiveModel(name); setTab('chat'); }}
+            onModelLoaded={path => {
+              setActiveModel(path);
+              setTab('chat');
+            }}
           />
         )}
       </main>
@@ -54,3 +114,6 @@ export default function App() {
   );
 }
 
+function modelBasename(path: string) {
+  return path.split(/[\\/]/).pop() ?? path;
+}
