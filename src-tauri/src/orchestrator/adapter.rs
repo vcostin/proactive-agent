@@ -40,31 +40,36 @@ impl LlamaCppAdapter {
     }
 
     /// Ask the server what model ID it actually uses.
-    /// Fully async — no block_in_place or block_on.
     async fn discover_model_id(&self) -> Option<String> {
-        #[derive(Deserialize)]
-        struct ModelsResp {
-            data: Vec<ModelEntry>,
-        }
-        #[derive(Deserialize)]
-        struct ModelEntry {
-            id: String,
-        }
-
-        let resp = self
-            .client
+        let raw = match self.client
             .get(format!("{}/v1/models", self.base_url))
             .timeout(std::time::Duration::from_secs(10))
             .send()
             .await
-            .ok()?
-            .error_for_status()
-            .ok()?;
+        {
+            Ok(r) => r,
+            Err(e) => { eprintln!("[ADAPTER] GET /v1/models network error: {e}"); return None; }
+        };
 
-        let models = resp.json::<ModelsResp>().await.ok()?;
-        let id = models.data.into_iter().next().map(|m| m.id)?;
-        eprintln!("[ADAPTER] /v1/models → discovered model id: '{id}'");
-        Some(id)
+        let status = raw.status();
+        let body = raw.text().await.unwrap_or_default();
+        eprintln!("[ADAPTER] GET /v1/models → {status} — {}", &body[..body.len().min(500)]);
+
+        if !status.is_success() { return None; }
+
+        #[derive(Deserialize)]
+        struct ModelsResp { data: Vec<ModelEntry> }
+        #[derive(Deserialize)]
+        struct ModelEntry { id: String }
+
+        match serde_json::from_str::<ModelsResp>(&body) {
+            Ok(m) => {
+                let id = m.data.into_iter().next()?.id;
+                eprintln!("[ADAPTER] using discovered model id: '{id}'");
+                Some(id)
+            }
+            Err(e) => { eprintln!("[ADAPTER] /v1/models parse error: {e}"); None }
+        }
     }
 
     /// Return the model ID to use in API calls — cached after the first query.
