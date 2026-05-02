@@ -1,3 +1,8 @@
+// Audio pipeline — built but not yet wired to the UI mic toggle.
+// Dead-code warnings are suppressed intentionally; these modules are
+// complete and will be connected when the voice toggle is implemented.
+#![allow(dead_code, unused_imports)]
+
 pub mod capture;
 pub mod stt;
 pub mod tts;

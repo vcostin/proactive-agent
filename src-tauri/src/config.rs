@@ -47,7 +47,12 @@ impl AppConfig {
         #[cfg(debug_assertions)]
         let (models_dir, db_path) = {
             let cwd = std::env::current_dir().unwrap_or_else(|_| data_dir.clone());
-            (cwd.join("models"), cwd.join("data").join("memory"))
+            // In `npm run tauri dev` the binary CWD is src-tauri/ — step up to project root.
+            let root = match cwd.file_name().and_then(|n| n.to_str()) {
+                Some("src-tauri") => cwd.parent().unwrap_or(&cwd).to_path_buf(),
+                _ => cwd,
+            };
+            (root.join("models"), root.join("data").join("memory"))
         };
         #[cfg(not(debug_assertions))]
         let (models_dir, db_path) = (data_dir.join("models"), data_dir.join("memory"));

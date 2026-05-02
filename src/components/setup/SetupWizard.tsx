@@ -222,10 +222,15 @@ function ChatModelStep({ error, onPick }: { error: string | null; onPick: () => 
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: 0 }}>
         Pick a <strong>.gguf</strong> chat model from anywhere on your disk.
-        For your hardware (16 GB VRAM), good choices:
+        For your hardware (16 GB VRAM) these are good fits — download one first,
+        then click Browse.
       </p>
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      {/* Suggestions — informational only, not clickable */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+        <div style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+          suggested models (download separately)
+        </div>
         {[
           ['Qwen2.5-14B-Instruct-Q8_0.gguf', '~15 GB', 'excellent'],
           ['Llama-3.1-8B-Instruct-Q8_0.gguf', '~9 GB', 'fast + solid'],
@@ -235,20 +240,19 @@ function ChatModelStep({ error, onPick }: { error: string | null; onPick: () => 
             display: 'flex', justifyContent: 'space-between',
             fontSize: 11, padding: '4px 8px',
             background: 'var(--bg)', borderRadius: 4,
+            borderLeft: '2px solid var(--border)',
           }}>
             <span style={{ color: 'var(--text-muted)', fontFamily: 'monospace' }}>{name}</span>
-            <span style={{ color: 'var(--text-muted)' }}>{size} · {note}</span>
+            <span style={{ color: 'var(--text-muted)', flexShrink: 0, marginLeft: 8 }}>{size} · {note}</span>
           </div>
         ))}
+        <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6 }}>
+          Get them at{' '}
+          <span style={{ color: 'var(--accent)' }}>huggingface.co/models?library=gguf</span>
+          {' '}or{' '}
+          <span style={{ color: 'var(--accent)' }}>lmstudio.ai/models</span>
+        </div>
       </div>
-
-      <p style={{ fontSize: 11, color: 'var(--text-muted)', margin: 0 }}>
-        Download from{' '}
-        <span style={{ color: 'var(--accent)' }}>huggingface.co/models?library=gguf</span>
-        {' '}or{' '}
-        <span style={{ color: 'var(--accent)' }}>lmstudio.ai/models</span>,
-        then click Browse below.
-      </p>
 
       {error && (
         <div style={{ fontSize: 11, color: 'var(--error)', padding: '6px 10px', border: '1px solid var(--error)', borderRadius: 'var(--radius)' }}>
