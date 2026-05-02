@@ -50,6 +50,17 @@ pub fn run() {
 
             spawn_sidecars(config.clone(), event_log.clone(), chat_child.clone());
 
+            // Run requirements check at every startup and emit the result so the
+            // frontend can show a fix prompt even when the wizard is already done.
+            let handle_deps = app_handle.clone();
+            tauri::async_runtime::spawn(async move {
+                // Small delay so the UI is ready to receive the event
+                tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+                if let Ok(deps) = commands::check_system_deps().await {
+                    let _ = handle_deps.emit("system_deps_checked", &deps);
+                }
+            });
+
             let orch_init = orchestrator.clone();
             let cfg_init = config.clone();
             let handle_init = app_handle.clone();
@@ -281,15 +292,19 @@ fn spawn_direct(
                     format!("{display_name} started (pid {:?})", child.id()));
                 let stderr = child.stderr.take();
                 let stdout = child.stdout.take();
-                let _child = child; // keep alive
 
                 tokio::join!(
                     stream_output(stdout, display_name, event_log.clone()),
                     stream_output(stderr, display_name, event_log.clone()),
                 );
 
-                monitor::push_event(&event_log, "[ADAPTER]",
-                    format!("{display_name} process ended"));
+                // Log exit code so we can diagnose crashes for ALL processes, not just chat
+                if let Ok(status) = child.wait().await {
+                    let code = status.code().unwrap_or(-1);
+                    let desc = exit_code_description(code);
+                    monitor::push_event(&event_log, "[ADAPTER]",
+                        format!("{display_name} exited (code {code} — {desc})"));
+                }
             }
             Err(e) => {
                 monitor::push_event(&event_log, "[ADAPTER]",

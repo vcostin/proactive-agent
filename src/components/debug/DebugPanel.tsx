@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useSystemStatus } from '../../hooks/useSystemStatus';
+import { SystemRequirements } from '../setup/SystemRequirements';
 import { AudioState } from './AudioState';
 import { ContextInspector } from './ContextInspector';
 import { EventLog } from './EventLog';
@@ -43,6 +44,10 @@ export function DebugPanel() {
       }}>
         <Panel title="Sidecar Health">
           <SidecarHealth />
+        </Panel>
+
+        <Panel title="System Requirements">
+          <SystemRequirements />
         </Panel>
 
         <Panel title="Scheduler">

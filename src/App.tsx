@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import { ChatWindow } from './components/chat/ChatWindow';
 import { DebugPanel } from './components/debug/DebugPanel';
 import { ModelPanel } from './components/models/ModelPanel';
+import { RequirementsBanner } from './components/setup/RequirementsBanner';
 import { SetupWizard } from './components/setup/SetupWizard';
 import { SetupStatus } from './types';
 
@@ -53,6 +54,9 @@ export default function App() {
   // Main app
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
+
+      {/* ── Requirements banner (shown when llama-server can't start) ── */}
+      <RequirementsBanner />
 
       {/* ── Tab bar ── */}
       <nav style={{
