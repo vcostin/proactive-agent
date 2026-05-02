@@ -177,16 +177,17 @@ pub async fn check_system_deps() -> CmdResult<SystemDeps> {
 
 /// Run `llama-server --version` to verify DLLs and entry points resolve correctly.
 async fn test_llama_binary() -> (bool, String) {
-    let bin_dir = crate::binaries_dir();
-    let binary = bin_dir.join(crate::sidecar_filename("llama-server"));
-
-    if !binary.exists() || binary.metadata().map(|m| m.len()).unwrap_or(0) < 1024 {
-        return (false, "binary not found — run npm run setup".to_string());
-    }
+    let binary = match crate::find_sidecar("llama-server") {
+        Some(b) => b,
+        None => return (false, "binary not found — run: npm run setup".to_string()),
+    };
+    let dll_dir = binary.parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(crate::binaries_dir);
 
     let priority_path = format!(
         "{};{}",
-        bin_dir.display(),
+        dll_dir.display(),
         std::env::var("PATH").unwrap_or_default()
     );
 
@@ -194,7 +195,7 @@ async fn test_llama_binary() -> (bool, String) {
         std::time::Duration::from_secs(8),
         tokio::process::Command::new(&binary)
             .arg("--version")
-            .current_dir(&bin_dir)
+            .current_dir(&dll_dir)
             .env("PATH", &priority_path)
             .output(),
     )
@@ -283,48 +284,83 @@ pub async fn install_vcredist(app_handle: tauri::AppHandle) -> CmdResult<()> {
 /// Copy the Visual C++ runtime DLLs from System32 into our binaries/ directory.
 /// Called automatically after VCRedist install and can be triggered manually.
 fn copy_vcredist_dlls_to_binaries() {
-    let bin_dir = crate::binaries_dir();
+    let root = crate::binaries_dir();
     let system32 = std::path::Path::new("C:\\Windows\\System32");
     let dlls = [
-        "VCRUNTIME140.dll",
-        "VCRUNTIME140_1.dll",
-        "MSVCP140.dll",
-        "MSVCP140_2.dll",
-        "CONCRT140.dll",
+        "VCRUNTIME140.dll", "VCRUNTIME140_1.dll",
+        "MSVCP140.dll", "MSVCP140_2.dll", "CONCRT140.dll",
     ];
+    // Copy into every sidecar subdirectory so each exe finds the correct version
+    let targets: Vec<std::path::PathBuf> = [
+        root.join("llama"),
+        root.join("whisper"),
+        root.clone(),   // legacy flat layout fallback
+    ]
+    .into_iter()
+    .filter(|p| p.exists())
+    .collect();
+
     for dll in &dlls {
         let src = system32.join(dll);
         if src.exists() {
-            let dst = bin_dir.join(dll);
-            let _ = std::fs::copy(&src, &dst);
+            for dir in &targets {
+                let _ = std::fs::copy(&src, dir.join(dll));
+            }
         }
     }
 }
 
-/// Open a terminal window that runs llama-server directly so the Windows
-/// "procedure entry point not found" dialog appears — it names the exact
-/// DLL and function that is missing.
+/// Open a new console window that runs llama-server --version directly.
+/// Windows shows a GUI popup naming the exact DLL and function that is
+/// missing before the process even starts — this is the definitive diagnostic.
 #[tauri::command]
 pub async fn open_llama_diagnostic() -> CmdResult<()> {
-    let bin_dir = crate::binaries_dir();
-    let binary = bin_dir.join(crate::sidecar_filename("llama-server"));
+    let binary = crate::find_sidecar("llama-server")
+        .ok_or_else(|| "llama-server not found — run: npm run setup".to_string())?;
+    let dll_dir = binary.parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(crate::binaries_dir);
+    let binary_name = binary.file_name()
+        .and_then(|n| n.to_str()).unwrap_or("llama-server.exe").to_string();
 
-    if !binary.exists() {
-        return Err("llama-server binary not found".to_string());
+    // Write a batch file — avoids every cmd.exe inline quoting issue
+    let bat = std::env::temp_dir().join("proactive_agent_diag.bat");
+    let content = format!(
+        "@echo off\r\ncd /d \"{dir}\"\r\necho.\r\necho Dir:  {dir}\r\necho Exe:  {name}\r\necho.\r\n{name} --version\r\necho.\r\nif %ERRORLEVEL% neq 0 (\r\n    echo FAILED  exit code: %ERRORLEVEL%\r\n    echo If a popup appeared, note the DLL name it mentions.\r\n) else (\r\n    echo OK  binary works!\r\n)\r\necho.\r\npause\r\n",
+        dir  = dll_dir.display(),
+        name = binary_name,
+    );
+    std::fs::write(&bat, content).map_err(to_cmd_err)?;
+
+    // Spawn cmd.exe /K <bat> with CREATE_NEW_CONSOLE so it opens in its own window.
+    // Using std::process::Command (not tokio) so we can set Windows creation flags.
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
+        std::process::Command::new("cmd")
+            .arg("/K")
+            .arg(&bat)
+            .creation_flags(CREATE_NEW_CONSOLE)
+            .spawn()
+            .map_err(to_cmd_err)?;
     }
-
-    // Open a cmd window that stays open so the user can read the error dialog
-    tokio::process::Command::new("cmd")
-        .args([
-            "/K",
-            &format!(
-                "cd /d \"{}\" && echo Running llama-server... && \"{}\" --version && echo OK - binary works! || echo Binary failed - read the error dialog above",
-                bin_dir.display(),
-                binary.display()
-            ),
-        ])
-        .spawn()
-        .map_err(to_cmd_err)?;
+    #[cfg(not(target_os = "windows"))]
+    {
+        // macOS / Linux: open a terminal with the equivalent shell script
+        let sh = std::env::temp_dir().join("proactive_agent_diag.sh");
+        let sh_content = format!(
+            "#!/bin/sh\ncd '{}'\necho 'Testing: {}'\n'{}' --version\necho 'Exit: '$?\nread -p 'Press Enter to close'\n",
+            bin_dir.display(), binary_name,
+            bin_dir.join(&binary_name).display()
+        );
+        std::fs::write(&sh, &sh_content).map_err(to_cmd_err)?;
+        let _ = std::process::Command::new("chmod").args(["+x", sh.to_str().unwrap_or("")]).status();
+        std::process::Command::new("open")
+            .args(["-a", "Terminal", sh.to_str().unwrap_or("")])
+            .spawn()
+            .map_err(to_cmd_err)?;
+    }
 
     Ok(())
 }

@@ -58,13 +58,16 @@ $tmpZip = "$env:TEMP\llama.zip"
 Download-File $llamaAsset.browser_download_url $tmpZip
 $llamaExe = Expand-And-Find $tmpZip "$env:TEMP\llama-extract" "llama-server.exe"
 
-# Copy binary + ALL DLLs found anywhere in the extracted zip (recursive)
-# Some releases nest DLLs in subdirectories
-Copy-Item $llamaExe.FullName "$BinDir\llama-server-x86_64-pc-windows-msvc.exe" -Force
+# Each sidecar gets its OWN subdirectory so their DLLs never conflict.
+# llama.cpp and whisper.cpp both ship ggml.dll — different versions.
+# Mixing them in one folder caused STATUS_ENTRYPOINT_NOT_FOUND on llama-server.
+$LlamaBinDir = Join-Path $BinDir "llama"
+New-Item -ItemType Directory -Force -Path $LlamaBinDir | Out-Null
+Copy-Item $llamaExe.FullName "$LlamaBinDir\llama-server-x86_64-pc-windows-msvc.exe" -Force
 $dllCount = 0
 Get-ChildItem "$env:TEMP\llama-extract" -Recurse -Filter "*.dll" |
-    ForEach-Object { Copy-Item $_.FullName $BinDir -Force; $dllCount++ }
-Write-Host "  OK llama-server.exe + $dllCount DLLs"
+    ForEach-Object { Copy-Item $_.FullName $LlamaBinDir -Force; $dllCount++ }
+Write-Host "  OK llama/ subdirectory: llama-server.exe + $dllCount DLLs"
 
 # ─── 2. whisper-server ────────────────────────────────────────────────────────
 Write-Host "`n[2/4] whisper.cpp (Windows x64)"
@@ -90,11 +93,13 @@ if (-not $whisperAsset) {
     $tmpWZip = "$env:TEMP\whisper.zip"
     Download-File $whisperAsset.browser_download_url $tmpWZip
     $whisperExe = Expand-And-Find $tmpWZip "$env:TEMP\whisper-extract" "whisper-server.exe"
-    Copy-Item $whisperExe.FullName "$BinDir\whisper-server-x86_64-pc-windows-msvc.exe" -Force
+    $WhisperBinDir = Join-Path $BinDir "whisper"
+    New-Item -ItemType Directory -Force -Path $WhisperBinDir | Out-Null
+    Copy-Item $whisperExe.FullName "$WhisperBinDir\whisper-server-x86_64-pc-windows-msvc.exe" -Force
     $wDllCount = 0
     Get-ChildItem "$env:TEMP\whisper-extract" -Recurse -Filter "*.dll" |
-        ForEach-Object { Copy-Item $_.FullName $BinDir -Force; $wDllCount++ }
-    Write-Host "  OK whisper-server.exe + $wDllCount DLLs"
+        ForEach-Object { Copy-Item $_.FullName $WhisperBinDir -Force; $wDllCount++ }
+    Write-Host "  OK whisper/ subdirectory: whisper-server.exe + $wDllCount DLLs"
 }
 
 # ─── 3. Models ────────────────────────────────────────────────────────────────

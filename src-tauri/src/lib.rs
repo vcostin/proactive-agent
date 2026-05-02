@@ -140,6 +140,24 @@ pub fn sidecar_filename(name: &str) -> String {
     return format!("{name}-x86_64-unknown-linux-gnu");
 }
 
+/// Locate a sidecar binary. Checks an isolated subdirectory first so each
+/// sidecar has its own DLLs and can't be contaminated by another sidecar's
+/// older/newer versions of shared libraries like ggml.dll.
+///
+/// Search order:
+///   1. binaries/{name}/{name}-{target}.exe   ← isolated (preferred)
+///   2. binaries/{name}-{target}.exe          ← legacy flat layout
+pub fn find_sidecar(name: &str) -> Option<PathBuf> {
+    let filename = sidecar_filename(name);
+    let root = binaries_dir();
+    [
+        root.join(name).join(&filename),
+        root.join(&filename),
+    ]
+    .into_iter()
+    .find(|p| p.exists() && p.metadata().map(|m| m.len() > 1024).unwrap_or(false))
+}
+
 /// Build a tokio::process::Command that prioritises our bundled DLLs on Windows.
 /// By prepending `bin_dir` to PATH we ensure our ggml/llama DLLs are found
 /// before any conflicting versions from LM Studio, CUDA installers, etc.
@@ -172,19 +190,22 @@ pub fn start_chat_server(
         }
         tokio::time::sleep(std::time::Duration::from_millis(600)).await;
 
-        let bin_dir = binaries_dir();
-        let binary = bin_dir.join(sidecar_filename("llama-server"));
-
-        if !binary.exists() || binary.metadata().map(|m| m.len()).unwrap_or(0) < 1024 {
-            monitor::push_event(&event_log, "[ADAPTER]",
-                format!("llama (chat) binary not found at {}", binary.display()));
-            return;
-        }
+        let binary = match find_sidecar("llama-server") {
+            Some(b) => b,
+            None => {
+                monitor::push_event(&event_log, "[ADAPTER]",
+                    "llama (chat): binary not found — run: npm run setup");
+                return;
+            }
+        };
+        let dll_dir = binary.parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(binaries_dir);
 
         monitor::push_event(&event_log, "[ADAPTER]",
             format!("llama (chat) launching → {}", binary.display()));
 
-        let spawn_result = make_cmd(&binary, &bin_dir)
+        let spawn_result = make_cmd(&binary, &dll_dir)
             .args(["--model", &model_path,
                    "--port", &port.to_string(),
                    "--host", "127.0.0.1",
@@ -272,20 +293,23 @@ fn spawn_direct(
     args: Vec<String>,
     event_log: SharedEventLog,
 ) {
-    let bin_dir = binaries_dir();
-    let binary = bin_dir.join(sidecar_filename(binary_name));
-
-    if !binary.exists() || binary.metadata().map(|m| m.len()).unwrap_or(0) < 1024 {
-        monitor::push_event(&event_log, "[ADAPTER]",
-            format!("{display_name}: binary not found or placeholder — skipping"));
-        return;
-    }
+    let binary = match find_sidecar(binary_name) {
+        Some(b) => b,
+        None => {
+            monitor::push_event(&event_log, "[ADAPTER]",
+                format!("{display_name}: not found — run: npm run setup"));
+            return;
+        }
+    };
+    let dll_dir = binary.parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(binaries_dir);
 
     tauri::async_runtime::spawn(async move {
         monitor::push_event(&event_log, "[ADAPTER]",
             format!("{display_name} launching → {}", binary.display()));
 
-        let spawn_result = make_cmd(&binary, &bin_dir).args(&args).spawn();
+        let spawn_result = make_cmd(&binary, &dll_dir).args(&args).spawn();
 
         match spawn_result {
             Ok(mut child) => {

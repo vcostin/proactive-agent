@@ -28,8 +28,8 @@
     "targets": "all",
     "icon": [],
     "externalBin": [
-      "../binaries/llama-server",
-      "../binaries/whisper-server",
+      "../binaries/llama/llama-server",
+      "../binaries/whisper/whisper-server",
       "../binaries/kokoro-server"
     ]
   }
