@@ -14,6 +14,10 @@ pub struct AppConfig {
     pub chat_model: String,
     /// Fixed to nomic-embed-text — never changed at runtime
     pub embed_model: String,
+    /// Filename of the nomic-embed-text GGUF in models_dir
+    pub embed_model_file: String,
+    /// Filename of the Whisper GGUF/bin in models_dir
+    pub whisper_model_file: String,
     pub persona_prompt: String,
     pub context_window_tokens: usize,
     pub top_k_episodic: usize,
@@ -33,6 +37,8 @@ impl Default for AppConfig {
             audio_device: None,
             chat_model: String::new(),
             embed_model: "nomic-embed-text".to_string(),
+            embed_model_file: "nomic-embed-text-v1.5.Q8_0.gguf".to_string(),
+            whisper_model_file: "ggml-base.en.bin".to_string(),
             persona_prompt: concat!(
                 "You are a helpful, proactive assistant with persistent memory. ",
                 "You may schedule follow-up messages by emitting a <defer> tag at the end of ",

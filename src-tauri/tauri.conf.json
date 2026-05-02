@@ -27,6 +27,10 @@
     "active": true,
     "targets": "all",
     "icon": [],
-    "externalBin": []
+    "externalBin": [
+      "../binaries/llama-server",
+      "../binaries/whisper-server",
+      "../binaries/kokoro-server"
+    ]
   }
 }
