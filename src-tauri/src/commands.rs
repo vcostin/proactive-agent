@@ -196,7 +196,6 @@ pub async fn swap_model(
 
     // Start (or restart) the llama-server process with the new model
     crate::start_chat_server(
-        &app_handle,
         model_path,
         port,
         event_log.inner().clone(),
