@@ -37,37 +37,48 @@ function Expand-And-Find($zip, $extractTo, $pattern) {
     $match
 }
 
-# ─── 1. llama-server  (Vulkan build — runs on AMD and Nvidia via Vulkan API) ──
-Write-Host "`n[1/4] llama.cpp (Vulkan, Windows x64)"
+# ─── 1. llama-server ─────────────────────────────────────────────────────────
+# Strategy: CPU build binary + Vulkan build DLLs.
+# The Vulkan-only llama-server.exe has a stripped HTTP server (only /health works).
+# The CPU build has the full API. It still loads Vulkan DLLs at runtime
+# from its directory, so GPU inference is preserved.
+Write-Host "`n[1/4] llama.cpp (CPU binary + Vulkan DLLs for GPU)"
 $llamaRelease = Get-LatestRelease "ggerganov/llama.cpp"
 Write-Host "      Release: $($llamaRelease.tag_name)"
 
-$llamaAsset = $llamaRelease.assets |
+$LlamaBinDir = Join-Path $BinDir "llama"
+New-Item -ItemType Directory -Force -Path $LlamaBinDir | Out-Null
+
+# Step A: Vulkan build — DLLs only (ggml-vulkan.dll etc for GPU inference)
+$vulkanAsset = $llamaRelease.assets |
     Where-Object { $_.name -match "win.*vulkan.*x64.*\.zip$" } |
     Select-Object -First 1
 
-if (-not $llamaAsset) {
-    # Fallback: look for any Windows x64 zip if Vulkan-specific not found
-    $llamaAsset = $llamaRelease.assets |
-        Where-Object { $_.name -match "win.*x64.*\.zip$" } |
-        Select-Object -First 1
+if ($vulkanAsset) {
+    Write-Host "  Downloading Vulkan DLLs..."
+    Download-File $vulkanAsset.browser_download_url "$env:TEMP\llama-vulkan.zip"
+    Remove-Item "$env:TEMP\llama-vulkan-extract" -Recurse -Force -ErrorAction SilentlyContinue
+    Expand-Archive "$env:TEMP\llama-vulkan.zip" -DestinationPath "$env:TEMP\llama-vulkan-extract" -Force
+    $dllCount = 0
+    Get-ChildItem "$env:TEMP\llama-vulkan-extract" -Recurse -Filter "*.dll" |
+        ForEach-Object { Copy-Item $_.FullName $LlamaBinDir -Force; $dllCount++ }
+    Write-Host "  OK Vulkan DLLs: $dllCount files"
+} else {
+    Write-Warning "Vulkan zip not found — GPU DLLs skipped (CPU inference only)"
 }
-if (-not $llamaAsset) { throw "Cannot find a Windows llama.cpp asset. Check https://github.com/ggerganov/llama.cpp/releases" }
 
-$tmpZip = "$env:TEMP\llama.zip"
-Download-File $llamaAsset.browser_download_url $tmpZip
-$llamaExe = Expand-And-Find $tmpZip "$env:TEMP\llama-extract" "llama-server.exe"
+# Step B: CPU build — server binary only (has full HTTP API including /v1/chat/completions)
+$cpuAsset = $llamaRelease.assets |
+    Where-Object { $_.name -match "win.*cpu.*x64.*\.zip$" } |
+    Select-Object -First 1
 
-# Each sidecar gets its OWN subdirectory so their DLLs never conflict.
-# llama.cpp and whisper.cpp both ship ggml.dll — different versions.
-# Mixing them in one folder caused STATUS_ENTRYPOINT_NOT_FOUND on llama-server.
-$LlamaBinDir = Join-Path $BinDir "llama"
-New-Item -ItemType Directory -Force -Path $LlamaBinDir | Out-Null
+if (-not $cpuAsset) { throw "Cannot find CPU llama.cpp build. Check https://github.com/ggerganov/llama.cpp/releases" }
+
+Write-Host "  Downloading CPU server binary..."
+Download-File $cpuAsset.browser_download_url "$env:TEMP\llama-cpu.zip"
+$llamaExe = Expand-And-Find "$env:TEMP\llama-cpu.zip" "$env:TEMP\llama-cpu-extract" "llama-server.exe"
 Copy-Item $llamaExe.FullName "$LlamaBinDir\llama-server-x86_64-pc-windows-msvc.exe" -Force
-$dllCount = 0
-Get-ChildItem "$env:TEMP\llama-extract" -Recurse -Filter "*.dll" |
-    ForEach-Object { Copy-Item $_.FullName $LlamaBinDir -Force; $dllCount++ }
-Write-Host "  OK llama/ subdirectory: llama-server.exe + $dllCount DLLs"
+Write-Host "  OK llama-server.exe (CPU build, full API) + $dllCount Vulkan DLLs"
 
 # ─── 2. whisper-server ────────────────────────────────────────────────────────
 Write-Host "`n[2/4] whisper.cpp (Windows x64)"
