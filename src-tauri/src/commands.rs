@@ -372,6 +372,32 @@ pub async fn diagnose_chat_server(
             Err(e) => results.push_str(&format!("\nPOST {} → ERROR: {}\n", path, e)),
         }
     }
+    // Also probe port 8081 (embed server) to compare route availability
+    results.push_str("\n\n── PORT 8081 (embed server) ──");
+    for (path, body, method) in &[
+        ("/health",  "",                           "GET"),
+        ("/props",   "",                           "GET"),
+        ("/v1/models","",                          "GET"),
+        ("/tokenize", r#"{"content":"hello"}"#,   "POST"),
+        ("/v1/embeddings", r#"{"input":"hello","model":"nomic-embed-text"}"#, "POST"),
+        ("/completion",    r#"{"prompt":"hello","n_predict":1}"#, "POST"),
+    ] {
+        let url = format!("http://127.0.0.1:8081{path}");
+        let resp = if *method == "GET" {
+            client.get(&url).send().await
+        } else {
+            client.post(&url).header("Content-Type","application/json").body(body.to_string()).send().await
+        };
+        match resp {
+            Ok(r) => {
+                let status = r.status();
+                let body_txt = r.text().await.unwrap_or_default();
+                results.push_str(&format!("\n{method} {} → {}\n{}\n", path, status, &body_txt[..body_txt.len().min(150)]));
+            }
+            Err(e) => results.push_str(&format!("\n{method} {} → ERROR: {}\n", path, e)),
+        }
+    }
+
     Ok(results)
 }
 
