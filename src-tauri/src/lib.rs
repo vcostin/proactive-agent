@@ -215,7 +215,8 @@ pub fn start_chat_server(
                    "--host", "127.0.0.1",
                    "--ctx-size", "4096",
                    "-ngl", "999",
-                   "--alias", "llama-chat"])
+                   "--alias", "llama-chat",
+                   "--embedding"])  // TEST: hypothesis that --embedding enables full route registration in b9009
             .spawn();
 
         match spawn_result {

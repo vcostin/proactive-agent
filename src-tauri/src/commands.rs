@@ -338,16 +338,38 @@ pub async fn diagnose_chat_server(
 
     let mut results = format!("our chat child PID: {:?}\n\nPort 8080 owner:\n{}\n", our_pid, port_owner);
 
-    for path in &["/health", "/props", "/v1/models", "/completion"] {
+    // GET endpoints
+    for path in &["/health", "/props", "/v1/models", "/slots"] {
         let url = format!("http://127.0.0.1:8080{path}");
         let resp = client.get(&url).send().await;
         match resp {
             Ok(r) => {
                 let status = r.status();
                 let body = r.text().await.unwrap_or_default();
-                results.push_str(&format!("\nGET {} → {}\n{}\n", path, status, &body[..body.len().min(300)]));
+                results.push_str(&format!("\nGET {} → {}\n{}\n", path, status, &body[..body.len().min(200)]));
             }
             Err(e) => results.push_str(&format!("\nGET {} → ERROR: {}\n", path, e)),
+        }
+    }
+    // POST endpoints
+    for (path, body) in &[
+        ("/tokenize",           r#"{"content":"hello"}"#),
+        ("/completion",         r#"{"prompt":"hello","n_predict":1}"#),
+        ("/v1/chat/completions", r#"{"model":"llama-chat","messages":[{"role":"user","content":"hi"}]}"#),
+    ] {
+        let url = format!("http://127.0.0.1:8080{path}");
+        let resp = client.post(&url)
+            .header("Content-Type", "application/json")
+            .body(body.to_string())
+            .send()
+            .await;
+        match resp {
+            Ok(r) => {
+                let status = r.status();
+                let body = r.text().await.unwrap_or_default();
+                results.push_str(&format!("\nPOST {} → {}\n{}\n", path, status, &body[..body.len().min(200)]));
+            }
+            Err(e) => results.push_str(&format!("\nPOST {} → ERROR: {}\n", path, e)),
         }
     }
     Ok(results)
