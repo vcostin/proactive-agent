@@ -315,6 +315,7 @@ fn copy_vcredist_dlls_to_binaries() {
 /// and raw responses from /health and /props to confirm server identity.
 #[tauri::command]
 pub async fn diagnose_chat_server(
+    config: State<'_, SharedConfig>,
     chat_child: State<'_, SharedChatChild>,
 ) -> CmdResult<String> {
     let our_pid = {
@@ -322,10 +323,17 @@ pub async fn diagnose_chat_server(
         guard.as_ref().and_then(|c| c.id())
     };
 
-    // Who owns port 8080 right now?
-    let port_owner = tokio::process::Command::new("powershell")
-        .args(["-Command",
-            "Get-NetTCPConnection -LocalPort 8080 -State Listen -ErrorAction SilentlyContinue | Select-Object LocalPort,OwningProcess | Format-Table -AutoSize | Out-String"])
+    // Who owns the chat port right now, and what process is it?
+    let chat_port = {
+        let cfg = config.read().await;
+        cfg.llama_port
+    };
+    let port_info = tokio::process::Command::new("powershell")
+        .args(["-Command", &format!(
+            "Get-NetTCPConnection -LocalPort {chat_port} -State Listen -ErrorAction SilentlyContinue | \
+             Select-Object LocalPort,OwningProcess,@{{N='ProcessName';E={{(Get-Process -Id $_.OwningProcess -ErrorAction SilentlyContinue).ProcessName}}}} | \
+             Format-Table -AutoSize | Out-String"
+        )])
         .output()
         .await
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
@@ -336,11 +344,14 @@ pub async fn diagnose_chat_server(
         .build()
         .unwrap_or_default();
 
-    let mut results = format!("our chat child PID: {:?}\n\nPort 8080 owner:\n{}\n", our_pid, port_owner);
+    let mut results = format!(
+        "our chat child PID: {:?}\nchat port: {chat_port}\n\nPort {chat_port} owner (with process name):\n{}\n",
+        our_pid, port_info
+    );
 
     // GET endpoints
     for path in &["/health", "/props", "/v1/models", "/slots"] {
-        let url = format!("http://127.0.0.1:8080{path}");
+        let url = format!("http://127.0.0.1:{chat_port}{path}");
         let resp = client.get(&url).send().await;
         match resp {
             Ok(r) => {
@@ -357,7 +368,7 @@ pub async fn diagnose_chat_server(
         ("/completion",         r#"{"prompt":"hello","n_predict":1}"#),
         ("/v1/chat/completions", r#"{"model":"llama-chat","messages":[{"role":"user","content":"hi"}]}"#),
     ] {
-        let url = format!("http://127.0.0.1:8080{path}");
+        let url = format!("http://127.0.0.1:{chat_port}{path}");
         let resp = client.post(&url)
             .header("Content-Type", "application/json")
             .body(body.to_string())
@@ -372,8 +383,12 @@ pub async fn diagnose_chat_server(
             Err(e) => results.push_str(&format!("\nPOST {} → ERROR: {}\n", path, e)),
         }
     }
-    // Also probe port 8081 (embed server) to compare route availability
-    results.push_str("\n\n── PORT 8081 (embed server) ──");
+    // Also probe the embed server to compare route availability
+    let embed_port = {
+        let cfg = config.read().await;
+        cfg.embed_port
+    };
+    results.push_str(&format!("\n\n── PORT {embed_port} (embed server) ──"));
     for (path, body, method) in &[
         ("/health",  "",                           "GET"),
         ("/props",   "",                           "GET"),
@@ -382,7 +397,7 @@ pub async fn diagnose_chat_server(
         ("/v1/embeddings", r#"{"input":"hello","model":"nomic-embed-text"}"#, "POST"),
         ("/completion",    r#"{"prompt":"hello","n_predict":1}"#, "POST"),
     ] {
-        let url = format!("http://127.0.0.1:8081{path}");
+        let url = format!("http://127.0.0.1:{embed_port}{path}");
         let resp = if *method == "GET" {
             client.get(&url).send().await
         } else {
