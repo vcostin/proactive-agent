@@ -95,23 +95,38 @@ export default function App() {
         )}
       </nav>
 
-      {/* ── Content ── */}
-      <main style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-        {tab === 'chat' && (
+      {/* ── Content — all tabs stay mounted, only visibility changes ── */}
+      <main style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
+        <TabPanel visible={tab === 'chat'}>
           <ChatWindow
             modelName={modelBasename(activeModel)}
             onModelClick={() => setTab('models')}
           />
-        )}
-        {tab === 'debug' && <DebugPanel />}
-        {tab === 'models' && (
+        </TabPanel>
+        <TabPanel visible={tab === 'debug'}>
+          <DebugPanel />
+        </TabPanel>
+        <TabPanel visible={tab === 'models'}>
           <ModelPanel
             activeModel={activeModel}
             onModelLoaded={path => { setActiveModel(path); setTab('chat'); }}
             onModelCleared={() => { setActiveModel(''); refreshStatus(); }}
           />
-        )}
+        </TabPanel>
       </main>
+    </div>
+  );
+}
+
+function TabPanel({ visible, children }: { visible: boolean; children: React.ReactNode }) {
+  return (
+    <div style={{
+      position: 'absolute', inset: 0,
+      display: 'flex', flexDirection: 'column',
+      visibility: visible ? 'visible' : 'hidden',
+      pointerEvents: visible ? 'auto' : 'none',
+    }}>
+      {children}
     </div>
   );
 }
