@@ -112,6 +112,7 @@ pub fn run() {
             commands::fire_deferred_now,
             commands::list_models,
             commands::get_debug_events,
+            commands::diagnose_chat_server,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -214,7 +215,7 @@ pub fn start_chat_server(
                    "--host", "127.0.0.1",
                    "--ctx-size", "4096",
                    "-ngl", "999",
-                   "--alias", "llama-chat"])   // fixed alias so adapter always knows the model ID
+                   "--alias", "llama-chat"])
             .spawn();
 
         match spawn_result {

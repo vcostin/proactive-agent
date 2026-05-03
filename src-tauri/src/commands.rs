@@ -310,6 +310,49 @@ fn copy_vcredist_dlls_to_binaries() {
     }
 }
 
+/// Diagnose what is actually running on the chat server port.
+/// Returns PID of our stored child, what process owns port 8080,
+/// and raw responses from /health and /props to confirm server identity.
+#[tauri::command]
+pub async fn diagnose_chat_server(
+    chat_child: State<'_, SharedChatChild>,
+) -> CmdResult<String> {
+    let our_pid = {
+        let guard = chat_child.lock().await;
+        guard.as_ref().and_then(|c| c.id())
+    };
+
+    // Who owns port 8080 right now?
+    let port_owner = tokio::process::Command::new("powershell")
+        .args(["-Command",
+            "Get-NetTCPConnection -LocalPort 8080 -State Listen -ErrorAction SilentlyContinue | Select-Object LocalPort,OwningProcess | Format-Table -AutoSize | Out-String"])
+        .output()
+        .await
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_else(|_| "netstat failed".to_string());
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(3))
+        .build()
+        .unwrap_or_default();
+
+    let mut results = format!("our chat child PID: {:?}\n\nPort 8080 owner:\n{}\n", our_pid, port_owner);
+
+    for path in &["/health", "/props", "/v1/models", "/completion"] {
+        let url = format!("http://127.0.0.1:8080{path}");
+        let resp = client.get(&url).send().await;
+        match resp {
+            Ok(r) => {
+                let status = r.status();
+                let body = r.text().await.unwrap_or_default();
+                results.push_str(&format!("\nGET {} → {}\n{}\n", path, status, &body[..body.len().min(300)]));
+            }
+            Err(e) => results.push_str(&format!("\nGET {} → ERROR: {}\n", path, e)),
+        }
+    }
+    Ok(results)
+}
+
 /// Open a new console window that runs llama-server --version directly.
 /// Windows shows a GUI popup naming the exact DLL and function that is
 /// missing before the process even starts — this is the definitive diagnostic.

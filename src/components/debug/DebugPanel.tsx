@@ -1,3 +1,4 @@
+import { invoke } from '@tauri-apps/api/core';
 import { useState } from 'react';
 import { useSystemStatus } from '../../hooks/useSystemStatus';
 import { SystemRequirements } from '../setup/SystemRequirements';
@@ -44,6 +45,7 @@ export function DebugPanel() {
       }}>
         <Panel title="Sidecar Health">
           <SidecarHealth />
+          <DiagnosticButton />
         </Panel>
 
         <Panel title="System Requirements">
@@ -86,6 +88,36 @@ export function DebugPanel() {
       </div>
 
       {showBrowser && <MemoryBrowser onClose={() => setShowBrowser(false)} />}
+    </div>
+  );
+}
+
+function DiagnosticButton() {
+  const [result, setResult] = useState('');
+  const [running, setRunning] = useState(false);
+  return (
+    <div style={{ marginTop: 8 }}>
+      <button
+        style={{ fontSize: 11, padding: '2px 10px' }}
+        disabled={running}
+        onClick={async () => {
+          setRunning(true);
+          try { setResult(await invoke<string>('diagnose_chat_server')); }
+          catch (e) { setResult(String(e)); }
+          finally { setRunning(false); }
+        }}
+      >
+        {running ? '…' : '🔍 diagnose port 8080'}
+      </button>
+      {result && (
+        <pre style={{
+          marginTop: 6, padding: 8, background: '#0a0a0a',
+          border: '1px solid var(--border)', borderRadius: 4,
+          fontSize: 10, lineHeight: 1.5, overflowX: 'auto', whiteSpace: 'pre-wrap',
+        }}>
+          {result}
+        </pre>
+      )}
     </div>
   );
 }
