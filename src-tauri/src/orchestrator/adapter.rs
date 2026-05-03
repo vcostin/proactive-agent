@@ -54,16 +54,24 @@ impl LlamaCppAdapter {
         eprintln!("[ADAPTER] GET /v1/models → {status} — {}", &body[..body.len().min(300)]);
         if !status.is_success() { return None; }
 
+        // llama.cpp server uses {"models":[{"model":"..."}]}
+        // OpenAI format uses {"data":[{"id":"..."}]} — handle both
         #[derive(Deserialize)]
-        struct ModelsResp { data: Vec<ModelEntry> }
+        struct ModelsResp {
+            models: Option<Vec<LlamaEntry>>,
+            data:   Option<Vec<OaiEntry>>,
+        }
         #[derive(Deserialize)]
-        struct ModelEntry { id: String }
+        struct LlamaEntry { model: String }
+        #[derive(Deserialize)]
+        struct OaiEntry { id: String }
 
         match serde_json::from_str::<ModelsResp>(&body) {
             Ok(m) => {
-                let id = m.data.into_iter().next()?.id;
-                eprintln!("[ADAPTER] discovered model id: '{id}'");
-                Some(id)
+                let id = m.models.and_then(|v| v.into_iter().next().map(|e| e.model))
+                    .or_else(|| m.data.and_then(|v| v.into_iter().next().map(|e| e.id)));
+                if let Some(ref i) = id { eprintln!("[ADAPTER] discovered model id: '{i}'"); }
+                id
             }
             Err(e) => { eprintln!("[ADAPTER] /v1/models parse error: {e}"); None }
         }
