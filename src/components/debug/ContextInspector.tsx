@@ -1,8 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { useEffect, useState } from 'react';
 import { AssembledContext, ContextBlock } from '../../types';
-
-const CONTEXT_WINDOW = 4096; // mirror AppConfig default
 
 const SECTION_COLORS: Record<string, string> = {
   persona:  '#4a9eff',
@@ -16,6 +15,7 @@ export function ContextInspector() {
   const [ctx, setCtx] = useState<AssembledContext | null>(null);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [loading, setLoading] = useState(false);
+  const [contextWindow, setContextWindow] = useState(4096);
 
   const refresh = () => {
     setLoading(true);
@@ -24,7 +24,23 @@ export function ContextInspector() {
       .finally(() => setLoading(false));
   };
 
-  useEffect(() => { refresh(); }, []);
+  useEffect(() => {
+    refresh();
+    // Read actual context window size from config
+    invoke<{ context_window_tokens: number }>('get_gen_settings')
+      .then(s => setContextWindow(s.context_window_tokens))
+      .catch(() => {});
+
+    // Auto-refresh after each streaming completion
+    let unlisten: (() => void) | null = null;
+    listen('chat_token', () => {}).then(fn => { unlisten = fn; });
+    // Refresh when a message completes (no more tokens)
+    const id = setInterval(() => {
+      if (!loading) invoke<AssembledContext | null>('get_last_context').then(c => { if (c) setCtx(c); });
+    }, 3000);
+    return () => { unlisten?.(); clearInterval(id); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   if (!ctx) {
     return (
@@ -43,6 +59,8 @@ export function ContextInspector() {
     ctx.episodic.token_count +
     ctx.recent_turns.reduce((s, t) => s + Math.ceil(t.content.split(/\s+/).length * 4 / 3), 0) +
     Math.ceil(ctx.user_input.split(/\s+/).length * 4 / 3);
+
+  const CONTEXT_WINDOW = contextWindow;
 
   const sections: { key: string; block: ContextBlock }[] = [
     { key: 'persona',  block: ctx.persona },

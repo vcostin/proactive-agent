@@ -68,9 +68,16 @@ export function ChatWindow({ modelName, onModelClick }: Props) {
       }}>
         <button
           onClick={onModelClick}
-          style={{ fontSize: 11, padding: '3px 8px', opacity: 0.8 }}
-          title="Switch model"
+          style={{ fontSize: 11, padding: '3px 8px', opacity: 0.8, display: 'flex', alignItems: 'center', gap: 5 }}
+          title={!llamaReady ? 'Loading model…' : 'Switch model'}
         >
+          {/* Status dot — no layout shift, just a colour change */}
+          <span style={{
+            width: 6, height: 6, borderRadius: '50%', flexShrink: 0,
+            background: llamaReady ? 'var(--success)' : 'var(--accent)',
+            boxShadow: llamaReady ? '0 0 4px var(--success)' : '0 0 6px var(--accent)',
+            animation: !llamaReady ? 'blink 1.2s ease-in-out infinite' : 'none',
+          }} />
           {modelName || 'no model loaded'}
         </button>
         <button
@@ -94,18 +101,6 @@ export function ChatWindow({ modelName, onModelClick }: Props) {
           {listening ? '🎙 listening' : micError ? '🎙 error' : '🎙'}
         </button>
       </div>
-
-      {/* ── Loading banner ── */}
-      {!llamaReady && (
-        <div style={{
-          display: 'flex', alignItems: 'center', gap: 8,
-          padding: '6px 14px', background: 'rgba(74,158,255,0.08)',
-          borderBottom: '1px solid var(--accent-dim)', fontSize: 11,
-          color: 'var(--accent)',
-        }}>
-          <Spinner /> Loading model — you can type, message will send when ready
-        </div>
-      )}
 
       {/* ── Message list ── */}
       <div style={{
@@ -173,11 +168,11 @@ export function ChatWindow({ modelName, onModelClick }: Props) {
         <button
           className="primary"
           onClick={handleSend}
-          disabled={!input.trim() || isLoading || !llamaReady}
+          disabled={!input.trim() || isLoading}
           style={{ height: 36, padding: '0 16px' }}
-          title={!llamaReady ? 'Waiting for model to load…' : undefined}
+          title={!llamaReady ? 'Model loading — message will queue' : undefined}
         >
-          {!llamaReady ? '…' : 'send'}
+          send
         </button>
       </div>
     </div>
@@ -272,15 +267,3 @@ function DotsLoader() {
   );
 }
 
-function Spinner() {
-  return (
-    <span style={{
-      display: 'inline-block', width: 10, height: 10,
-      border: '1px solid var(--accent-dim)',
-      borderTop: '1px solid var(--accent)',
-      borderRadius: '50%',
-      animation: 'spin 0.8s linear infinite',
-      flexShrink: 0,
-    }} />
-  );
-}

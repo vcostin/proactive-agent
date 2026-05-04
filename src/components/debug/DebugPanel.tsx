@@ -13,6 +13,7 @@ import { SidecarHealth } from './SidecarHealth';
 export function DebugPanel() {
   const { status, error } = useSystemStatus();
   const [showBrowser, setShowBrowser] = useState(false);
+  const [showDevTools, setShowDevTools] = useState(false);
 
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
@@ -45,7 +46,6 @@ export function DebugPanel() {
       }}>
         <Panel title="Sidecar Health">
           <SidecarHealth />
-          <DiagnosticButton />
         </Panel>
 
         <Panel title="System Requirements">
@@ -84,6 +84,23 @@ export function DebugPanel() {
           <Panel title="Event Log">
             <EventLog />
           </Panel>
+        </div>
+
+        {/* Dev tools — collapsed by default, not visible in production UX */}
+        <div style={{ gridColumn: '1 / -1' }}>
+          <button
+            onClick={() => setShowDevTools(v => !v)}
+            style={{ fontSize: 10, padding: '2px 8px', color: 'var(--text-muted)', width: '100%', textAlign: 'left' }}
+          >
+            {showDevTools ? '▾' : '▸'} dev tools
+          </button>
+          {showDevTools && (
+            <div style={{ marginTop: 6, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+              <Panel title="Port Diagnostic">
+                <DiagnosticButton />
+              </Panel>
+            </div>
+          )}
         </div>
       </div>
 
