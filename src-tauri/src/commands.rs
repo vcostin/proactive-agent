@@ -840,6 +840,38 @@ pub async fn set_gen_settings(
     Ok(())
 }
 
+/// Inject a fake <defer> response to test the proactivity pipeline end-to-end
+/// without needing the model to actually emit the tag.
+#[tauri::command]
+pub async fn test_defer(
+    scheduler: State<'_, SharedScheduler>,
+    app_handle: tauri::AppHandle,
+    message: String,
+    after_minutes: Option<i64>,
+) -> CmdResult<String> {
+    use crate::monitor::DeferredMessage;
+    use chrono::Utc;
+    use uuid::Uuid;
+
+    let mins = after_minutes.unwrap_or(1);
+    let msg = DeferredMessage {
+        id: Uuid::new_v4().to_string(),
+        message: message.clone(),
+        trigger: "manual_test".to_string(),
+        fire_at: Utc::now() + chrono::Duration::minutes(mins),
+    };
+    let id = msg.id.clone();
+    scheduler.lock().await.add(msg);
+    // If after_minutes == 0, fire immediately for testing
+    if mins == 0 {
+        if let Some(m) = scheduler.lock().await.fire_now(&id) {
+            app_handle.emit("proactive_message", &m).map_err(to_cmd_err)?;
+            return Ok(format!("fired immediately: {}", m.message));
+        }
+    }
+    Ok(format!("scheduled in {mins} min — use 'Fire Now' in Scheduler panel or set after_minutes=0"))
+}
+
 // ── Event log ─────────────────────────────────────────────────────────────────
 
 #[tauri::command]

@@ -75,6 +75,28 @@ Still needed:
 - Add `.gitattributes`: `* text=auto eol=lf` to stop the CRLF warnings on every commit
 - Keep `Cargo.lock` committed (it's a binary app, not a library)
 
+### 15. Self-sufficient distribution (P3 — do before any release) ⬜
+The installed app must run with a double-click. No Node, npm, cargo, Python, or dev
+tools should be required at runtime. Most pieces are already in place:
+
+**Already self-sufficient:**
+- ✅ In-app model download (SetupWizard)
+- ✅ VCRedist auto-install (SystemRequirements)
+- ✅ sidecar binaries declared via `externalBin` (Tauri bundles them)
+- ✅ First-run wizard replaces any setup scripts
+
+**Still needed:**
+- `binaries_dir()` in release mode should use `std::env::current_exe().parent()`
+  not `current_dir()` (different paths in a bundled app)
+- `tauri.conf.json` `externalBin` paths need to work for both dev (`../binaries/X`)
+  and release (bundled alongside exe) — test with `npm run tauri build`
+- Kokoro/TTS: must be a pre-built binary (sherpa-onnx) — no Python runtime
+- Whisper: must stay alive without manual restarts
+- `data/` directory: in release use OS app data dir, not project root
+  (already done for config.json, confirm for LanceDB and models)
+- Remove the `npm run setup` step entirely — user should get everything
+  from the in-app wizard, not a terminal script
+
 ---
 
 ## Architecture items status

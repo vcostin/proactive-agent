@@ -136,18 +136,67 @@ if (-not (Test-Path $embedModel)) {
     Write-Host "  OK nomic-embed-text-v1.5.Q8_0.gguf"
 } else { Write-Host "  OK nomic-embed-text (already present)" }
 
-# ─── 4. Kokoro TTS ───────────────────────────────────────────────────────────
-Write-Host "`n[4/4] Kokoro TTS server"
-$kokoroExe = Join-Path $BinDir "kokoro-server-x86_64-pc-windows-msvc.exe"
-if (Test-Path $kokoroExe) {
+# ─── 4. TTS server via sherpa-onnx (no Python required) ──────────────────────
+# sherpa-onnx provides pre-built binaries with an OpenAI-compatible TTS HTTP server.
+# We use it as the Kokoro replacement — our TtsClient already hits /v1/audio/speech.
+Write-Host "`n[4/4] TTS server (sherpa-onnx)"
+
+$KokoroBinDir = Join-Path $BinDir "kokoro"
+New-Item -ItemType Directory -Force -Path $KokoroBinDir | Out-Null
+
+$ttsExeDest = Join-Path $KokoroBinDir "kokoro-server-x86_64-pc-windows-msvc.exe"
+
+if (Test-Path $ttsExeDest) {
     Write-Host "  OK kokoro-server.exe (already present)"
 } else {
-    Write-Host "  Kokoro TTS requires Python 3.10+."
-    Write-Host "  Run:  scripts\build-kokoro-exe.ps1"
-    Write-Host "  Or for development run the Python server directly:"
-    Write-Host "    pip install kokoro-onnx soundfile fastapi uvicorn"
-    Write-Host "    python scripts\kokoro_server.py --port 8083"
+    Write-Host "  Downloading sherpa-onnx TTS server..."
+    $sherpaRelease = Invoke-RestMethod "https://api.github.com/repos/k2-fsa/sherpa-onnx/releases/latest" -Headers $headers
+    Write-Host "      Release: $($sherpaRelease.tag_name)"
+
+    $sherpaAsset = $sherpaRelease.assets |
+        Where-Object { $_.name -match "sherpa-onnx-v.*-win-x64\.tar\.bz2$" } |
+        Select-Object -First 1
+
+    if (-not $sherpaAsset) {
+        Write-Warning "sherpa-onnx Windows release not found. TTS will be unavailable."
+        Write-Warning "Download manually: https://github.com/k2-fsa/sherpa-onnx/releases"
+    } else {
+        $tmpTts = "$env:TEMP\sherpa-onnx.tar.bz2"
+        Download-File $sherpaAsset.browser_download_url $tmpTts
+
+        # Extract tar.bz2 (requires tar available in Windows 10+)
+        Remove-Item "$env:TEMP\sherpa-extract" -Recurse -Force -ErrorAction SilentlyContinue
+        New-Item -ItemType Directory -Force -Path "$env:TEMP\sherpa-extract" | Out-Null
+        tar -xjf $tmpTts -C "$env:TEMP\sherpa-extract" 2>$null
+
+        $serverExe = Get-ChildItem "$env:TEMP\sherpa-extract" -Recurse -Filter "sherpa-onnx-offline-tts-server.exe" |
+            Select-Object -First 1
+
+        if ($serverExe) {
+            Copy-Item $serverExe.FullName $ttsExeDest -Force
+            # Copy all DLLs from the same directory
+            Get-ChildItem $serverExe.Directory -Filter "*.dll" |
+                ForEach-Object { Copy-Item $_.FullName $KokoroBinDir -Force }
+            Write-Host "  OK sherpa-onnx TTS server"
+        } else {
+            Write-Warning "sherpa-onnx-offline-tts-server.exe not found in archive."
+        }
+    }
 }
+
+# Download a piper TTS voice model (en_US-lessac-medium, ~65 MB)
+$ttsModelDir = Join-Path $ModelsDir "tts"
+New-Item -ItemType Directory -Force -Path $ttsModelDir | Out-Null
+$ttsModel     = Join-Path $ttsModelDir "en_US-lessac-medium.onnx"
+$ttsModelJson = Join-Path $ttsModelDir "en_US-lessac-medium.onnx.json"
+
+if (-not (Test-Path $ttsModel)) {
+    Write-Host "  Downloading piper TTS voice (en_US-lessac-medium, ~65 MB)..."
+    $voiceBase = "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium"
+    Download-File "$voiceBase/en_US-lessac-medium.onnx"      $ttsModel
+    Download-File "$voiceBase/en_US-lessac-medium.onnx.json" $ttsModelJson
+    Write-Host "  OK piper voice model"
+} else { Write-Host "  OK piper voice model (already present)" }
 
 # ─── Summary ─────────────────────────────────────────────────────────────────
 Write-Host "`n─────────────────────────────────────────────────────────────"

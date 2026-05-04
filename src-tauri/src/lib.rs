@@ -139,6 +139,7 @@ pub fn run() {
             commands::get_debug_events,
             commands::get_gen_settings,
             commands::set_gen_settings,
+            commands::test_defer,
             commands::diagnose_chat_server,
             commands::start_voice_input,
             commands::stop_voice_input,
@@ -150,12 +151,23 @@ pub fn run() {
 // ── Process helpers ───────────────────────────────────────────────────────────
 
 pub fn binaries_dir() -> PathBuf {
-    let cwd = std::env::current_dir().unwrap_or_default();
-    let root = match cwd.file_name().and_then(|n| n.to_str()) {
-        Some("src-tauri") => cwd.parent().unwrap_or(&cwd).to_path_buf(),
-        _ => cwd,
-    };
-    root.join("binaries")
+    #[cfg(debug_assertions)]
+    {
+        // Dev: current_dir() is src-tauri/ — step up to project root
+        let cwd = std::env::current_dir().unwrap_or_default();
+        let root = match cwd.file_name().and_then(|n| n.to_str()) {
+            Some("src-tauri") => cwd.parent().unwrap_or(&cwd).to_path_buf(),
+            _ => cwd,
+        };
+        return root.join("binaries");
+    }
+    // Release: Tauri bundles externalBin alongside the main exe
+    #[allow(unreachable_code)]
+    std::env::current_exe()
+        .unwrap_or_default()
+        .parent()
+        .map(|p| p.join("binaries"))
+        .unwrap_or_else(|| PathBuf::from("binaries"))
 }
 
 pub fn sidecar_filename(name: &str) -> String {
@@ -281,13 +293,14 @@ pub fn start_chat_server(
 fn spawn_sidecars(config: SharedConfig, event_log: SharedEventLog, chat_child: SharedChatChild) {
     tauri::async_runtime::spawn(async move {
         let cfg = config.read().await;
-        let chat_model   = cfg.chat_model.clone();
-        let embed_path   = cfg.embed_model_path().to_string_lossy().into_owned();
-        let whisper_path = cfg.whisper_model_path().to_string_lossy().into_owned();
-        let embed_port   = cfg.embed_port;
-        let whisper_port = cfg.whisper_port;
-        let kokoro_port  = cfg.kokoro_port;
-        let llama_port   = cfg.llama_port;
+        let chat_model     = cfg.chat_model.clone();
+        let embed_path     = cfg.embed_model_path().to_string_lossy().into_owned();
+        let whisper_path   = cfg.whisper_model_path().to_string_lossy().into_owned();
+        let cfg_models_dir = cfg.models_dir.clone();
+        let embed_port     = cfg.embed_port;
+        let whisper_port   = cfg.whisper_port;
+        let kokoro_port    = cfg.kokoro_port;
+        let llama_port     = cfg.llama_port;
         drop(cfg);
 
         if chat_model.is_empty() {
@@ -316,10 +329,20 @@ fn spawn_sidecars(config: SharedConfig, event_log: SharedEventLog, chat_child: S
                  "-t".into(), "4".into()],
             event_log.clone());
 
-        spawn_direct("kokoro-server", "kokoro",
-            vec!["--port".into(), kokoro_port.to_string(),
-                 "--host".into(), "127.0.0.1".into()],
-            event_log.clone());
+        // TTS via sherpa-onnx (piper voice model)
+        let tts_model = cfg_models_dir.join("tts").join("en_US-lessac-medium.onnx");
+        let tts_tokens = cfg_models_dir.join("tts").join("en_US-lessac-medium.onnx.json");
+        if tts_model.exists() {
+            spawn_direct("kokoro-server", "kokoro (sherpa-onnx TTS)",
+                vec!["--tts-rule-fsts".into(), "".into(),  // placeholder
+                     "--tts-model".into(), tts_model.to_string_lossy().into_owned(),
+                     "--tts-tokens".into(), tts_tokens.to_string_lossy().into_owned(),
+                     "--port".into(), kokoro_port.to_string()],
+                event_log.clone());
+        } else {
+            monitor::push_event(&event_log, "[ADAPTER]",
+                "TTS model not found — run: npm run setup (skipping kokoro)");
+        }
     });
 }
 

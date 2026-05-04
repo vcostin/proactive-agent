@@ -1,0 +1,15 @@
+# Normalize line endings to LF on commit for all text files
+* text=auto eol=lf
+
+# Windows scripts stay CRLF
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+*.ps1  text eol=crlf
+
+# Binaries — no conversion
+*.exe  binary
+*.dll  binary
+*.bin  binary
+*.gguf binary
+*.ico  binary
+*.png  binary

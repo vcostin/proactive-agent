@@ -2,6 +2,39 @@ import { invoke } from '@tauri-apps/api/core';
 import { useState } from 'react';
 import { DeferredMessage, SchedulerState } from '../../types';
 
+function TestDeferButton() {
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState('');
+  return (
+    <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid var(--border)' }}>
+      <div style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 4 }}>
+        Test proactivity pipeline
+      </div>
+      <div style={{ display: 'flex', gap: 6 }}>
+        <button
+          onClick={async () => {
+            setBusy(true);
+            try {
+              const r = await invoke<string>('test_defer', {
+                message: 'This is a test proactive message from the scheduler.',
+                afterMinutes: 0,
+              });
+              setResult(r);
+            } catch (e) { setResult(String(e)); }
+            finally { setBusy(false); }
+          }}
+          disabled={busy}
+          className="primary"
+          style={{ fontSize: 10, padding: '2px 10px' }}
+        >
+          {busy ? '…' : 'fire test defer now'}
+        </button>
+      </div>
+      {result && <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 4 }}>{result}</div>}
+    </div>
+  );
+}
+
 interface Props { scheduler: SchedulerState; }
 
 export function SchedulerPanel({ scheduler }: Props) {
@@ -42,6 +75,8 @@ export function SchedulerPanel({ scheduler }: Props) {
           last fired: <span style={{ color: 'var(--text)' }}>{scheduler.last_fired.message}</span>
         </div>
       )}
+
+      <TestDeferButton />
     </div>
   );
 }
