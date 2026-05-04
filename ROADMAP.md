@@ -26,14 +26,14 @@ Placeholder binary only. Options in order of effort:
 - b) Find a pre-built kokoro-cpp binary with OpenAI-compatible `/v1/audio/speech` endpoint
 - c) Use `piper-tts` as a drop-in replacement (ONNX, faster, no Python)
 
-### 4. Streaming chat responses
+### ~~4. Streaming chat responses~~ ✅ DONE
 Currently waits for full response. Add streaming:
 - Set `stream: true` in `ChatRequest`
 - Parse Server-Sent Events in the adapter
 - Push tokens to the frontend as they arrive
 - Shows intermediate tokens in the message bubble
 
-### 5. Chat history persistence
+### ~~5. Chat history persistence~~ ✅ DONE
 Messages live only in React state — lost on restart.
 - Add `save_conversation` Tauri command (writes turns to `data/history.json`)
 - Load on startup and populate `useChat` state
@@ -43,7 +43,7 @@ Messages live only in React state — lost on restart.
 
 ## P2 — Quality of life
 
-### 6. Loading state while model warms up
+### ~~6. Loading state while model warms up~~ ✅ DONE
 After llama-server starts it takes 5-30s to be ready. During that window, messages fail silently.
 - Poll `/health` in the adapter before sending, retry with backoff
 - Show "Loading model…" spinner in the chat header when llama :18080 is unreachable
