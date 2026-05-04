@@ -48,19 +48,19 @@ After llama-server starts it takes 5-30s to be ready. During that window, messag
 - Poll `/health` in the adapter before sending, retry with backoff
 - Show "Loading model…" spinner in the chat header when llama :18080 is unreachable
 
-### 7. Semantic memory distillation
+### ~~7. Semantic memory distillation~~ ✅ DONE
 `SemanticStore.distill()` is a stub. Implement:
 - Background tokio task running every N minutes
 - Reads recent episodic entries, calls LLM to extract durable facts
 - Writes to semantic collection
 - Update `MemoryStats.last_distillation` timestamp
 
-### 8. Context window overflow handling
+### ~~8. Context window overflow handling~~ ✅ DONE
 When total tokens exceed `context_window_tokens`, the request will fail.
 - Detect overflow before sending (use `AssembledContext.total_tokens()`)
 - Strategy: drop oldest episodic entries first, then summarise recent turns
 
-### 9. Model parameter controls
+### ~~9. Model parameter controls~~ ✅ DONE
 Add sliders/inputs to the Models tab or a settings panel:
 - Temperature (default 0.8)
 - Top-P / Top-K
