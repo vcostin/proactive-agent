@@ -323,21 +323,21 @@ fn spawn_sidecars(config: SharedConfig, event_log: SharedEventLog, chat_child: S
             event_log.clone());
 
         spawn_direct("whisper-server", "whisper",
-            vec!["-m".into(), whisper_path,
-                 "-p".into(), whisper_port.to_string(),
-                 "-H".into(), "127.0.0.1".into(),
-                 "-t".into(), "4".into()],
+            vec!["--model".into(), whisper_path,
+                 "--port".into(), whisper_port.to_string(),
+                 "--host".into(), "127.0.0.1".into()],
             event_log.clone());
 
         // TTS via sherpa-onnx (piper voice model)
         let tts_model = cfg_models_dir.join("tts").join("en_US-lessac-medium.onnx");
         let tts_tokens = cfg_models_dir.join("tts").join("en_US-lessac-medium.onnx.json");
         if tts_model.exists() {
+            // sherpa-onnx piper/vits model uses --vits-model and --vits-tokens
             spawn_direct("kokoro-server", "kokoro (sherpa-onnx TTS)",
-                vec!["--tts-rule-fsts".into(), "".into(),  // placeholder
-                     "--tts-model".into(), tts_model.to_string_lossy().into_owned(),
-                     "--tts-tokens".into(), tts_tokens.to_string_lossy().into_owned(),
-                     "--port".into(), kokoro_port.to_string()],
+                vec!["--vits-model".into(), tts_model.to_string_lossy().into_owned(),
+                     "--vits-tokens".into(), tts_tokens.to_string_lossy().into_owned(),
+                     "--port".into(), kokoro_port.to_string(),
+                     "--num-threads".into(), "2".into()],
                 event_log.clone());
         } else {
             monitor::push_event(&event_log, "[ADAPTER]",

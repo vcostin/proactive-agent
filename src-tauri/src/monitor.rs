@@ -216,6 +216,9 @@ pub async fn run_monitor_loop(
         .build()
         .unwrap_or_default();
 
+    // Track previous alive state per sidecar — only log on state transitions
+    let mut prev_alive: std::collections::HashMap<&str, bool> = std::collections::HashMap::new();
+
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
     loop {
         interval.tick().await;
@@ -241,13 +244,16 @@ pub async fn run_monitor_loop(
                 };
             let latency_ms = start.elapsed().as_millis() as u64;
 
-            if !alive {
-                emit_debug_event(
-                    &app_handle,
-                    &event_log,
-                    "[MONITOR]",
-                    format!("sidecar {name} unreachable on :{port}"),
-                ).await;
+            // Only emit event log entry when state changes — not every 5 seconds
+            let was_alive = prev_alive.get(name).copied();
+            if was_alive != Some(alive) {
+                let msg = if alive {
+                    format!("sidecar {name} :{port} → online ({latency_ms}ms)")
+                } else {
+                    format!("sidecar {name} :{port} → offline")
+                };
+                emit_debug_event(&app_handle, &event_log, "[MONITOR]", msg).await;
+                prev_alive.insert(name, alive);
             }
 
             let _ = app_handle.emit(

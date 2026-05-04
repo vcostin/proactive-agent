@@ -48,19 +48,33 @@ impl TtsClient {
 
     async fn synthesise_chunk(&self, text: &str) -> Result<Vec<u8>> {
         let start = Instant::now();
-        // Kokoro server — OpenAI TTS-compatible endpoint.
-        // EXTEND: adjust endpoint / request shape to match the specific Kokoro build in use.
-        let body = TtsRequest { model: "kokoro", input: text, voice: "af_heart" };
-        let bytes = self
-            .client
+
+        // Try OpenAI-compatible /v1/audio/speech first (Kokoro, piper-server, etc.)
+        let openai_body = TtsRequest { model: "tts-1", input: text, voice: "en_US-lessac-medium" };
+        let resp = self.client
             .post(format!("{}/v1/audio/speech", self.base_url))
-            .json(&body)
+            .json(&openai_body)
             .send()
-            .await?
-            .error_for_status()?
-            .bytes()
-            .await?
-            .to_vec();
+            .await;
+
+        let bytes = match resp {
+            Ok(r) if r.status().is_success() => r.bytes().await?.to_vec(),
+            _ => {
+                // Fallback: sherpa-onnx native /tts endpoint
+                #[derive(serde::Serialize)]
+                struct SherpaReq<'a> { text: &'a str, sid: u32, speed: f32 }
+                let sherpa_body = SherpaReq { text, sid: 0, speed: 1.0 };
+                self.client
+                    .post(format!("{}/tts", self.base_url))
+                    .json(&sherpa_body)
+                    .send()
+                    .await?
+                    .error_for_status()?
+                    .bytes()
+                    .await?
+                    .to_vec()
+            }
+        };
 
         self.last_latency_ms
             .store(start.elapsed().as_millis() as u64, Ordering::Relaxed);
