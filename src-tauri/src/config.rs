@@ -70,7 +70,7 @@ impl AppConfig {
             audio_device: None,
             embed_model: "nomic-embed-text".to_string(),
             embed_model_file: "nomic-embed-text-v1.5.Q8_0.gguf".to_string(),
-            whisper_model_file: "ggml-base.en.bin".to_string(),
+            whisper_model_file: "ggml-small.en.bin".to_string(),
             persona_prompt: concat!(
                 "You are a helpful, proactive assistant with persistent memory. ",
                 "You remember facts about the user across conversations. ",
