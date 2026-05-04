@@ -166,14 +166,20 @@ pub async fn start_voice_input(
     let stop_flag = Arc::new(AtomicBool::new(false));
     let stop_clone = stop_flag.clone();
 
+    // Channel to get the actual sample rate/channels back from the audio thread
+    let (cfg_tx, cfg_rx) = std::sync::mpsc::channel::<(u32, u16)>();
+
     // audio capture: stays on its own thread (cpal::Stream is !Send on WASAPI)
     let thread_result = std::thread::Builder::new()
         .name("audio-capture".into())
         .spawn(move || {
             match crate::audio::capture::AudioCapture::start(tx) {
                 Ok(capture) => {
-                    eprintln!("[AUDIO] capture started: {} Hz, {} ch", capture.sample_rate, capture.channels);
-                    // Block until stop is signalled; dropping `capture` closes the channel
+                    let sr = capture.sample_rate;
+                    let ch = capture.channels;
+                    eprintln!("[AUDIO] capture started: {sr} Hz, {ch} ch");
+                    // Send actual device config so STT loop uses the correct sample rate
+                    let _ = cfg_tx.send((sr, ch));
                     while !stop_clone.load(Ordering::Relaxed) {
                         std::thread::sleep(std::time::Duration::from_millis(50));
                     }
@@ -192,9 +198,13 @@ pub async fn start_voice_input(
         *g = Some(stop_flag);
     }
 
+    // Wait briefly for the capture thread to report its actual sample rate/channels
+    let (sample_rate, channels) = cfg_rx
+        .recv_timeout(std::time::Duration::from_secs(3))
+        .unwrap_or((16000, 1));
+
     let whisper_port = config.read().await.whisper_port;
-    // STT loop runs in async context — exits when channel closes (thread drops capture)
-    tauri::async_runtime::spawn(crate::audio::run_stt_loop(rx, whisper_port, 16000, 1, app_handle));
+    tauri::async_runtime::spawn(crate::audio::run_stt_loop(rx, whisper_port, sample_rate, channels, app_handle));
 
     Ok(())
 }
