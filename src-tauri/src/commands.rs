@@ -511,7 +511,7 @@ pub async fn send_message(
     let orch = lock.as_mut().ok_or("Orchestrator not yet initialised")?;
 
     let (response, deferred) =
-        orch.send_message(message).await.map_err(to_cmd_err)?;
+        orch.send_message(message, &app_handle).await.map_err(to_cmd_err)?;
 
     if let Some(msg) = deferred {
         scheduler.lock().await.add(msg.clone());

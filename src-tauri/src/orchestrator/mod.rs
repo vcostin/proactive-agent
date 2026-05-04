@@ -62,10 +62,11 @@ impl Orchestrator {
     }
 
     /// Full conversation turn: embed → retrieve → assemble → infer → parse → store.
-    /// Returns the cleaned response text and any parsed deferred message.
+    /// Streams tokens to the frontend via `chat_token` events on `app_handle`.
     pub async fn send_message(
         &mut self,
         user_input: String,
+        app_handle: &tauri::AppHandle,
     ) -> Result<(String, Option<DeferredMessage>)> {
         // Snapshot config — release lock before async LLM call
         let (persona, top_k_ep, top_k_sem, window) = {
@@ -116,8 +117,8 @@ impl Orchestrator {
             user_input.clone(),
         );
 
-        // 4. Call LLM — no locks held here
-        let response = self.adapter.complete(ctx.clone()).await?;
+        // 4. Call LLM with streaming — tokens emitted as chat_token events
+        let response = self.adapter.complete_streaming(ctx.clone(), app_handle).await?;
 
         // 5. Parse <defer> tags
         let (clean, deferred) = parse_defer(&response.content);

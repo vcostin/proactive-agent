@@ -226,7 +226,6 @@ pub fn start_chat_server(
                 let stdout = child.stdout.take();
                 { *chat_child.lock().await = Some(child); }
 
-                // Stream both stdout and stderr
                 tokio::join!(
                     stream_output(stdout, "llama (chat)", event_log.clone()),
                     stream_output(stderr, "llama (chat)", event_log.clone()),

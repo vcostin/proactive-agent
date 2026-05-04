@@ -1,5 +1,6 @@
 import { KeyboardEvent, useCallback, useEffect, useRef, useState } from 'react';
 import { useChat } from '../../hooks/useChat';
+import { useLlamaReady } from '../../hooks/useLlamaReady';
 import { useProactiveEvents } from '../../hooks/useProactiveEvents';
 import { DeferredMessage } from '../../types';
 import { WaveformVisualizer } from './WaveformVisualizer';
@@ -10,7 +11,8 @@ interface Props {
 }
 
 export function ChatWindow({ modelName, onModelClick }: Props) {
-  const { messages, isLoading, error, sendMessage, addProactive } = useChat();
+  const { messages, streamingText, isLoading, error, sendMessage, addProactive, clearHistory } = useChat();
+  const llamaReady = useLlamaReady();
   const [input, setInput] = useState('');
   const [listening, setListening] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -54,6 +56,13 @@ export function ChatWindow({ modelName, onModelClick }: Props) {
         >
           {modelName || 'no model loaded'}
         </button>
+        <button
+          onClick={() => { if (confirm('Clear conversation history?')) clearHistory(); }}
+          style={{ fontSize: 10, padding: '2px 8px', color: 'var(--text-muted)' }}
+          title="Clear chat history"
+        >
+          clear
+        </button>
         <div style={{ flex: 1 }} />
         <WaveformVisualizer isActive={listening} energyLevel={listening ? 0.6 : 0} />
         <button
@@ -68,6 +77,18 @@ export function ChatWindow({ modelName, onModelClick }: Props) {
           {listening ? '🎙 listening' : '🎙'}
         </button>
       </div>
+
+      {/* ── Loading banner ── */}
+      {!llamaReady && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 8,
+          padding: '6px 14px', background: 'rgba(74,158,255,0.08)',
+          borderBottom: '1px solid var(--accent-dim)', fontSize: 11,
+          color: 'var(--accent)',
+        }}>
+          <Spinner /> Loading model — you can type, message will send when ready
+        </div>
+      )}
 
       {/* ── Message list ── */}
       <div style={{
@@ -85,10 +106,20 @@ export function ChatWindow({ modelName, onModelClick }: Props) {
           <MessageBubble key={msg.id} role={msg.role} content={msg.content} />
         ))}
 
-        {isLoading && (
-          <div style={{ alignSelf: 'flex-start' }}>
-            <Bubble style={{ background: 'var(--asst-bubble)', opacity: 0.6 }}>
-              <DotsLoader />
+        {/* Streaming bubble — shows tokens as they arrive */}
+        {streamingText !== null && (
+          <div style={{ alignSelf: 'flex-start', maxWidth: '75%' }}>
+            <Bubble style={{ background: 'var(--asst-bubble)' }}>
+              {streamingText.length > 0
+                ? <Markdown text={streamingText} />
+                : <DotsLoader />
+              }
+              <span style={{
+                display: 'inline-block', width: 8, height: 12,
+                background: 'var(--accent)', marginLeft: 2,
+                animation: 'blink 1s step-end infinite',
+                verticalAlign: 'text-bottom',
+              }} />
             </Bubble>
           </div>
         )}
@@ -125,10 +156,11 @@ export function ChatWindow({ modelName, onModelClick }: Props) {
         <button
           className="primary"
           onClick={handleSend}
-          disabled={!input.trim() || isLoading}
+          disabled={!input.trim() || isLoading || !llamaReady}
           style={{ height: 36, padding: '0 16px' }}
+          title={!llamaReady ? 'Waiting for model to load…' : undefined}
         >
-          send
+          {!llamaReady ? '…' : 'send'}
         </button>
       </div>
     </div>
@@ -220,5 +252,18 @@ function DotsLoader() {
     <span style={{ letterSpacing: 4, color: 'var(--text-muted)' }}>
       · · ·
     </span>
+  );
+}
+
+function Spinner() {
+  return (
+    <span style={{
+      display: 'inline-block', width: 10, height: 10,
+      border: '1px solid var(--accent-dim)',
+      borderTop: '1px solid var(--accent)',
+      borderRadius: '50%',
+      animation: 'spin 0.8s linear infinite',
+      flexShrink: 0,
+    }} />
   );
 }
