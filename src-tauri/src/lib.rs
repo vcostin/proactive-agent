@@ -330,7 +330,7 @@ fn spawn_sidecars(config: SharedConfig, event_log: SharedEventLog, chat_child: S
 
         // TTS via sherpa-onnx (piper voice model)
         let tts_model = cfg_models_dir.join("tts").join("en_US-lessac-medium.onnx");
-        let tts_tokens = cfg_models_dir.join("tts").join("en_US-lessac-medium.onnx.json");
+        let _tts_tokens = cfg_models_dir.join("tts").join("en_US-lessac-medium.onnx.json"); // used by TtsClient subprocess
         // TTS (sherpa-onnx) runs as a subprocess per request, not as a persistent server.
         // TtsClient.synthesise_via_cli() calls the binary directly — no HTTP server needed.
         let tts_bin = crate::find_sidecar("kokoro-server");
