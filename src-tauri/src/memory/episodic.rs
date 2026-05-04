@@ -107,6 +107,17 @@ impl EpisodicStore {
         Ok(self.table.count_rows(None).await? as u64)
     }
 
+    /// Return the N most recently stored entries (for distillation).
+    pub async fn retrieve_recent(&self, limit: usize) -> Result<Vec<EpisodicEntry>> {
+        use lancedb::query::ExecutableQuery;
+        let mut stream = self.table.query().limit(limit).execute().await?;
+        let mut entries = Vec::new();
+        while let Some(batch) = stream.try_next().await? {
+            entries.extend(Self::batch_to_entries(&batch)?);
+        }
+        Ok(entries)
+    }
+
     fn schema() -> Schema {
         Schema::new(vec![
             Field::new("id", DataType::Utf8, false),

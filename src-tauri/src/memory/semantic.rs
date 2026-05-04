@@ -93,11 +93,57 @@ impl SemanticStore {
         Ok(self.table.count_rows(None).await? as u64)
     }
 
-    /// Background distillation: extract long-term facts from recent episodic entries.
-    /// Called from a tokio task — never blocks a conversation turn.
-    /// EXTEND Phase 3: implement LLM-assisted fact extraction
-    pub async fn distill(&self) -> Result<()> {
-        Ok(())
+    /// Extract durable facts from recent episodic entries using the LLM.
+    /// Returns the number of new facts stored.
+    pub async fn distill_from_episodic(
+        &self,
+        turns: &[crate::memory::episodic::EpisodicEntry],
+        adapter: &dyn crate::orchestrator::adapter::ModelAdapter,
+        embed_svc: &super::embedding::EmbeddingService,
+    ) -> Result<usize> {
+        if turns.is_empty() { return Ok(0); }
+
+        // Format recent turns as a readable conversation
+        let conversation = turns.iter()
+            .map(|t| format!("[{}]: {}", t.role, t.content))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Ask LLM to extract durable facts
+        let ctx = crate::orchestrator::context::AssembledContext::assemble(
+            concat!(
+                "You extract concise, durable facts about the user from conversations. ",
+                "Output ONLY a bullet list, one fact per line, each starting with '- '. ",
+                "Focus on: preferences, ongoing projects, skills, habits, goals. ",
+                "Skip small talk. If no durable facts found, output exactly: NONE"
+            ),
+            &[],
+            &[],
+            vec![],
+            format!("Extract facts from this conversation:\n\n{conversation}"),
+        );
+
+        let response = adapter.complete(ctx).await?;
+        let text = response.content.trim().to_string();
+
+        if text == "NONE" || text.is_empty() {
+            return Ok(0);
+        }
+
+        let mut stored = 0;
+        for line in text.lines() {
+            let fact = line.trim().trim_start_matches('-').trim();
+            if fact.is_empty() || fact.len() < 10 { continue; }
+
+            // Classify category from content (simple keyword heuristic)
+            let category = classify_fact(fact);
+
+            if let Ok(embedding) = embed_svc.embed(fact).await {
+                self.store(fact, category, embedding).await?;
+                stored += 1;
+            }
+        }
+        Ok(stored)
     }
 
     fn schema() -> Schema {
@@ -171,5 +217,21 @@ impl SemanticStore {
             });
         }
         Ok(result)
+    }
+}
+
+
+fn classify_fact(fact: &str) -> &'static str {
+    let lower = fact.to_lowercase();
+    if lower.contains("prefer") || lower.contains("like") || lower.contains("dislike") || lower.contains("love") || lower.contains("hate") {
+        "preference"
+    } else if lower.contains("work") || lower.contains("project") || lower.contains("build") || lower.contains("develop") || lower.contains("code") {
+        "project"
+    } else if lower.contains("use") || lower.contains("skill") || lower.contains("know") || lower.contains("learn") || lower.contains("experience") {
+        "skill"
+    } else if lower.contains("always") || lower.contains("usually") || lower.contains("often") || lower.contains("habit") || lower.contains("routine") {
+        "habit"
+    } else {
+        "general"
     }
 }

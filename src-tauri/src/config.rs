@@ -34,6 +34,8 @@ pub struct AppConfig {
     pub top_k_episodic: usize,
     pub top_k_semantic: usize,
     pub recent_turns_window: usize,
+    pub temperature: f32,
+    pub top_p: f32,
 }
 
 impl AppConfig {
@@ -79,6 +81,8 @@ impl AppConfig {
             top_k_episodic: 5,
             top_k_semantic: 5,
             recent_turns_window: 10,
+            temperature: 0.7,
+            top_p: 0.95,
         }
     }
 

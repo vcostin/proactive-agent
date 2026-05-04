@@ -69,13 +69,15 @@ impl Orchestrator {
         app_handle: &tauri::AppHandle,
     ) -> Result<(String, Option<DeferredMessage>)> {
         // Snapshot config — release lock before async LLM call
-        let (persona, top_k_ep, top_k_sem, window) = {
+        let (persona, top_k_ep, top_k_sem, window, temperature, top_p) = {
             let cfg = self.config.read().await;
             (
                 cfg.persona_prompt.clone(),
                 cfg.top_k_episodic,
                 cfg.top_k_semantic,
                 cfg.recent_turns_window,
+                cfg.temperature,
+                cfg.top_p,
             )
         };
 
@@ -109,6 +111,26 @@ impl Orchestrator {
             .rev()
             .collect();
 
+        // 3b. Trim to fit context window — drop oldest episodic entries first
+        let mut episodic_texts = episodic_texts;
+        let mut recent = recent;
+        let limit = {
+            let cfg = self.config.read().await;
+            cfg.context_window_tokens
+        };
+        // Gradually remove episodic entries until we fit
+        while !episodic_texts.is_empty() {
+            let probe = AssembledContext::assemble(&persona, &semantic_facts, &episodic_texts, recent.clone(), user_input.clone());
+            if probe.total_tokens() <= limit { break; }
+            episodic_texts.remove(0);
+        }
+        // If still over, trim recent turns from the front
+        while recent.len() > 1 {
+            let probe = AssembledContext::assemble(&persona, &semantic_facts, &episodic_texts, recent.clone(), user_input.clone());
+            if probe.total_tokens() <= limit { break; }
+            recent.remove(0);
+        }
+
         let ctx = AssembledContext::assemble(
             &persona,
             &semantic_facts,
@@ -118,7 +140,8 @@ impl Orchestrator {
         );
 
         // 4. Call LLM with streaming — tokens emitted as chat_token events
-        let response = self.adapter.complete_streaming(ctx.clone(), app_handle).await?;
+        let params = crate::orchestrator::adapter::GenParams { temperature, top_p };
+        let response = self.adapter.complete_streaming(ctx.clone(), app_handle, params).await?;
 
         // 5. Parse <defer> tags
         let (clean, deferred) = parse_defer(&response.content);
@@ -162,6 +185,17 @@ impl Orchestrator {
     /// The alias is always "llama-chat" — matches --alias in start_chat_server.
     pub fn swap_adapter(&mut self, port: u16, _model_path: impl Into<String>) {
         self.adapter = Box::new(LlamaCppAdapter::new(port, "llama-chat"));
+    }
+
+    /// Run one distillation pass: read recent episodic turns, ask the LLM to
+    /// extract durable facts, store them in semantic memory.
+    /// Called from a background task — never blocks conversation.
+    pub async fn distill(&mut self) -> anyhow::Result<usize> {
+        let turns = self.memory.episodic.retrieve_recent(30).await?;
+        let count = self.memory.semantic
+            .distill_from_episodic(&turns, self.adapter.as_ref(), &self.memory.embedding)
+            .await?;
+        Ok(count)
     }
 }
 

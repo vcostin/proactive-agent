@@ -805,6 +805,41 @@ pub async fn list_models(config: State<'_, SharedConfig>) -> CmdResult<Vec<Model
     Ok(models)
 }
 
+// ── Model generation parameters ──────────────────────────────────────────────
+
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct GenSettings {
+    pub temperature: f32,
+    pub top_p: f32,
+    pub context_window_tokens: usize,
+}
+
+#[tauri::command]
+pub async fn get_gen_settings(config: State<'_, SharedConfig>) -> CmdResult<GenSettings> {
+    let cfg = config.read().await;
+    Ok(GenSettings {
+        temperature: cfg.temperature,
+        top_p: cfg.top_p,
+        context_window_tokens: cfg.context_window_tokens,
+    })
+}
+
+#[tauri::command]
+pub async fn set_gen_settings(
+    config: State<'_, SharedConfig>,
+    app_handle: tauri::AppHandle,
+    settings: GenSettings,
+) -> CmdResult<()> {
+    let mut cfg = config.write().await;
+    cfg.temperature = settings.temperature.clamp(0.0, 2.0);
+    cfg.top_p = settings.top_p.clamp(0.0, 1.0);
+    cfg.context_window_tokens = settings.context_window_tokens.max(512);
+    if let Ok(config_path) = app_handle.path().app_config_dir() {
+        let _ = cfg.save(&config_path.join("config.json"));
+    }
+    Ok(())
+}
+
 // ── Event log ─────────────────────────────────────────────────────────────────
 
 #[tauri::command]

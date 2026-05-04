@@ -91,6 +91,27 @@ pub fn run() {
                 orchestrator::scheduler::run_scheduler_loop(sched_loop, handle_sched).await;
             });
 
+            // ── Semantic distillation loop (every 10 min) ────────────────────
+            let orch_distill = orchestrator.clone();
+            let log_distill = event_log.clone();
+            tauri::async_runtime::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_secs(60)).await; // wait for init
+                let mut interval = tokio::time::interval(std::time::Duration::from_secs(600));
+                loop {
+                    interval.tick().await;
+                    let mut lock = orch_distill.lock().await;
+                    if let Some(ref mut orch) = *lock {
+                        match orch.distill().await {
+                            Ok(n) if n > 0 => monitor::push_event(&log_distill, "[MEMORY]",
+                                format!("distilled {n} new semantic facts")),
+                            Ok(_) => {}
+                            Err(e) => monitor::push_event(&log_distill, "[MEMORY]",
+                                format!("distillation error: {e}")),
+                        }
+                    }
+                }
+            });
+
             let cfg_monitor = config.clone();
             let log_monitor = event_log.clone();
             let handle_monitor = app_handle.clone();
@@ -116,6 +137,8 @@ pub fn run() {
             commands::fire_deferred_now,
             commands::list_models,
             commands::get_debug_events,
+            commands::get_gen_settings,
+            commands::set_gen_settings,
             commands::diagnose_chat_server,
             commands::start_voice_input,
             commands::stop_voice_input,

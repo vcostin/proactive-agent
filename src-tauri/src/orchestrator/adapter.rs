@@ -17,16 +17,24 @@ pub struct ModelResponse {
     pub completion_tokens: u32,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct GenParams {
+    pub temperature: f32,
+    pub top_p: f32,
+}
+
+impl Default for GenParams {
+    fn default() -> Self { Self { temperature: 0.7, top_p: 0.95 } }
+}
+
 #[async_trait]
 pub trait ModelAdapter: Send + Sync {
-    /// Non-streaming completion (fallback).
     async fn complete(&self, context: AssembledContext) -> Result<ModelResponse>;
-    /// Streaming completion — emits `chat_token` events as tokens arrive,
-    /// emits `chat_done` when finished. Falls back to complete() if not supported.
     async fn complete_streaming(
         &self,
         context: AssembledContext,
         app_handle: &tauri::AppHandle,
+        params: GenParams,
     ) -> Result<ModelResponse>;
     fn model_id(&self) -> &str;
 }
@@ -94,9 +102,10 @@ impl LlamaCppAdapter {
         model_id: &str,
         messages: Vec<Message>,
         app_handle: &tauri::AppHandle,
+        params: GenParams,
     ) -> Result<Option<ModelResponse>> {
         #[derive(Serialize)]
-        struct ChatReq<'a> { model: &'a str, messages: Vec<Message>, stream: bool }
+        struct ChatReq<'a> { model: &'a str, messages: Vec<Message>, stream: bool, temperature: f32, top_p: f32 }
         #[derive(Deserialize)]
         struct StreamEvent { choices: Vec<StreamChoice>, timings: Option<Timings> }
         #[derive(Deserialize)]
@@ -106,7 +115,7 @@ impl LlamaCppAdapter {
         #[derive(Deserialize)]
         struct Timings { predicted_per_second: Option<f64> }
 
-        let req = ChatReq { model: model_id, messages, stream: true };
+        let req = ChatReq { model: model_id, messages, stream: true, temperature: params.temperature, top_p: params.top_p };
         let raw = self.client
             .post(format!("{}/v1/chat/completions", self.base_url))
             .json(&req)
@@ -265,12 +274,12 @@ impl ModelAdapter for LlamaCppAdapter {
         &self,
         context: AssembledContext,
         app_handle: &tauri::AppHandle,
+        params: GenParams,
     ) -> Result<ModelResponse> {
         let model_id = self.resolve_model_id().await;
         let messages = context.to_messages();
 
-        // Try streaming first; fall back to non-streaming if unsupported
-        match self.stream_v1_chat(&model_id, messages.clone(), app_handle).await? {
+        match self.stream_v1_chat(&model_id, messages.clone(), app_handle, params).await? {
             Some(r) => Ok(r),
             None => {
                 // Server doesn't support streaming — fall back and emit single token

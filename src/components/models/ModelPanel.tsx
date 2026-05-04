@@ -4,6 +4,8 @@ import { useEffect, useState } from 'react';
 import { ModelInfo } from '../../types';
 import { ModelList } from './ModelList';
 
+interface GenSettings { temperature: number; top_p: number; context_window_tokens: number; }
+
 interface Props {
   activeModel: string;
   onModelLoaded: (path: string) => void;
@@ -15,6 +17,20 @@ export function ModelPanel({ activeModel, onModelLoaded, onModelCleared }: Props
   const [loading, setLoading] = useState<string | null>(null);
   const [clearing, setClearing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [settings, setSettings] = useState<GenSettings>({ temperature: 0.7, top_p: 0.95, context_window_tokens: 4096 });
+  const [settingsSaved, setSettingsSaved] = useState(false);
+
+  useEffect(() => {
+    invoke<GenSettings>('get_gen_settings').then(setSettings).catch(() => {});
+  }, []);
+
+  const saveSettings = async () => {
+    try {
+      await invoke('set_gen_settings', { settings });
+      setSettingsSaved(true);
+      setTimeout(() => setSettingsSaved(false), 1500);
+    } catch (e) { setError(String(e)); }
+  };
 
   const refresh = () => {
     invoke<ModelInfo[]>('list_models')
@@ -128,6 +144,53 @@ export function ModelPanel({ activeModel, onModelLoaded, onModelCleared }: Props
           />
         </div>
       )}
+      {/* Generation parameters */}
+      <div style={{ padding: '10px 16px', borderTop: '1px solid var(--border)' }}>
+        <div style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8 }}>
+          Generation parameters
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: 12 }}>
+          {[
+            { key: 'temperature' as const, label: 'Temperature', min: 0, max: 2, step: 0.05 },
+            { key: 'top_p' as const,       label: 'Top-P',       min: 0, max: 1, step: 0.05 },
+          ].map(({ key, label, min, max, step }) => (
+            <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <span style={{ color: 'var(--text-muted)', width: 90 }}>{label}</span>
+              <input
+                type="range" min={min} max={max} step={step}
+                value={settings[key]}
+                onChange={e => setSettings(s => ({ ...s, [key]: parseFloat(e.target.value) }))}
+                style={{ flex: 1 }}
+              />
+              <span style={{ width: 36, textAlign: 'right', color: 'var(--text)' }}>
+                {settings[key].toFixed(2)}
+              </span>
+            </div>
+          ))}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span style={{ color: 'var(--text-muted)', width: 90 }}>Context</span>
+            <input
+              type="range" min={512} max={32768} step={512}
+              value={settings.context_window_tokens}
+              onChange={e => setSettings(s => ({ ...s, context_window_tokens: parseInt(e.target.value) }))}
+              style={{ flex: 1 }}
+            />
+            <span style={{ width: 36, textAlign: 'right', color: 'var(--text)' }}>
+              {settings.context_window_tokens >= 1024
+                ? `${(settings.context_window_tokens / 1024).toFixed(0)}k`
+                : settings.context_window_tokens}
+            </span>
+          </div>
+          <button
+            className={settingsSaved ? '' : 'primary'}
+            onClick={saveSettings}
+            style={{ alignSelf: 'flex-end', fontSize: 11, padding: '3px 14px' }}
+          >
+            {settingsSaved ? '✓ saved' : 'apply'}
+          </button>
+        </div>
+      </div>
+
     </div>
   );
 }
