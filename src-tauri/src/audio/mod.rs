@@ -12,10 +12,18 @@ use tauri::Emitter;
 use tokio::sync::mpsc;
 
 const AUDIO_CHANNEL_BUF: usize = 256;
-const SILENCE_MS: u64 = 800;   // wait 800ms of silence before transcribing
+const SILENCE_MS: u64 = 800;
+/// Gain multiplier applied before sending audio to Whisper.
+/// 2.0 = +6 dB, 3.0 = +9.5 dB, 4.0 = +12 dB. Tune if mic is still too quiet.
+const MIC_GAIN: f32 = 2.5;
 
 /// Filter out common whisper hallucinations for non-speech audio.
 /// Returns empty string if the transcript should be discarded.
+/// Amplify PCM samples by `gain`, clamped to [-1.0, 1.0] to avoid clipping.
+fn amplify(samples: &[f32], gain: f32) -> Vec<f32> {
+    samples.iter().map(|&s| (s * gain).clamp(-1.0, 1.0)).collect()
+}
+
 fn clean_transcript(text: &str) -> String {
     let t = text.trim();
     if t.is_empty() { return String::new(); }
@@ -84,7 +92,9 @@ pub async fn run_stt_loop(
                 // Silence gap — require at least 0.4s of audio (avoids blank clips)
                 let min_samples = sample_rate as usize * 2 / 5; // 0.4 seconds
                 if buffer.len() >= min_samples {
-                    match stt.transcribe(&buffer, sample_rate, channels).await {
+                    // Boost mic input before transcription (compensates for low mic level)
+                    let boosted = amplify(&buffer, MIC_GAIN);
+                    match stt.transcribe(&boosted, sample_rate, channels).await {
                         Ok(text) => {
                             let cleaned = clean_transcript(&text);
                             if !cleaned.is_empty() {
