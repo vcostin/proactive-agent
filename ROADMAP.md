@@ -1,109 +1,98 @@
 # Proactive Agent — Roadmap
 
-Current state: chat works, memory works, debug panel works, sidecar management works.
+**Current state:** chat + streaming + memory + voice input + debug panel all working.
+Model parameters exposed in UI. Semantic distillation running in background.
 
 ---
 
-## P1 — Core gaps (do these first)
+## P1 — Core gaps
 
 ### ~~1. Voice input wiring~~ ✅ DONE
-`AudioCapture` and `SttClient` are fully built in Phase 4 but not connected to the UI.
+AudioCapture → STT loop → `voice_transcript` event → `sendMessage`. Mic toggle in ChatWindow.
 
-- Start audio capture when user clicks the 🎙 toggle in `ChatWindow`
-- Run `audio::run_stt_loop` in a background tokio task
-- Route transcript into `send_message` instead of keyboard input
-- Show VAD energy bar live via `useSystemStatus` (AudioState already has `energy_level`)
+### 2. Whisper-server stays alive ⚠️ IN PROGRESS
+Whisper loads model successfully but exits after init. Added `-H 127.0.0.1 -t 4` flags.
+- Check `[ADAPTER]` log after restart to see exit code
+- If still failing: try `--host` vs `-H`, or download a different whisper.cpp build
 
-### 2. Whisper-server port binding — in progress, testing -H and -t flags
-Whisper loads the model and uses GPU but exits after load. Needs investigation:
-- Check if `-p 18082` is the correct argument format for this whisper build
-- Try `--port 18082` vs `-p 18082` vs other variants
-- May need a different whisper.cpp release
-
-### 3. Kokoro TTS
-Placeholder binary only. Options in order of effort:
-- a) `scripts/build-kokoro-exe.ps1` — compile `kokoro_server.py` via PyInstaller (Python required)
-- b) Find a pre-built kokoro-cpp binary with OpenAI-compatible `/v1/audio/speech` endpoint
-- c) Use `piper-tts` as a drop-in replacement (ONNX, faster, no Python)
+### 3. Kokoro TTS ⬜
+Placeholder binary. Best options:
+- **a) sherpa-onnx** — pre-built Windows binary, ONNX TTS, no Python required, fast.
+  Has an HTTP server mode with OpenAI-compatible `/v1/audio/speech`.
+- b) `scripts/build-kokoro-exe.ps1` — PyInstaller (requires Python 3.10+)
+- c) piper-tts — CLI only, needs a wrapper server
 
 ### ~~4. Streaming chat responses~~ ✅ DONE
-Currently waits for full response. Add streaming:
-- Set `stream: true` in `ChatRequest`
-- Parse Server-Sent Events in the adapter
-- Push tokens to the frontend as they arrive
-- Shows intermediate tokens in the message bubble
+SSE token streaming with blinking cursor bubble.
 
 ### ~~5. Chat history persistence~~ ✅ DONE
-Messages live only in React state — lost on restart.
-- Add `save_conversation` Tauri command (writes turns to `data/history.json`)
-- Load on startup and populate `useChat` state
-- Add "New conversation" button to clear
+localStorage, survives restarts, 200-message cap, clear button.
 
 ---
 
 ## P2 — Quality of life
 
 ### ~~6. Loading state while model warms up~~ ✅ DONE
-After llama-server starts it takes 5-30s to be ready. During that window, messages fail silently.
-- Poll `/health` in the adapter before sending, retry with backoff
-- Show "Loading model…" spinner in the chat header when llama :18080 is unreachable
+Blue spinner banner, disabled send button, auto-enables when health check passes.
 
 ### ~~7. Semantic memory distillation~~ ✅ DONE
-`SemanticStore.distill()` is a stub. Implement:
-- Background tokio task running every N minutes
-- Reads recent episodic entries, calls LLM to extract durable facts
-- Writes to semantic collection
-- Update `MemoryStats.last_distillation` timestamp
+Background task every 10 min. LLM extracts durable facts from episodic turns.
+Auto-classifies into preference/project/skill/habit categories. Logs to [MEMORY].
 
 ### ~~8. Context window overflow handling~~ ✅ DONE
-When total tokens exceed `context_window_tokens`, the request will fail.
-- Detect overflow before sending (use `AssembledContext.total_tokens()`)
-- Strategy: drop oldest episodic entries first, then summarise recent turns
+Trims oldest episodic entries first, then recent turns. Never hard-fails.
 
 ### ~~9. Model parameter controls~~ ✅ DONE
-Add sliders/inputs to the Models tab or a settings panel:
-- Temperature (default 0.8)
-- Top-P / Top-K
-- Context window size
-- GPU layers (`-ngl`)
+Temperature, Top-P, context window sliders in Models tab. Persisted to config.json.
+Passed to every inference call via `GenParams`.
 
-### 10. `<defer>` proactivity end-to-end test
-The scheduler is fully built. Test with a model that actually emits `<defer>` tags:
-- Add the defer format to the persona prompt more explicitly
-- Use the "Fire Now" button in the debug Scheduler panel to test firing
-- Verify the proactive message appears in chat as a special bubble
+### 10. `<defer>` proactivity end-to-end test ⬜
+Scheduler is fully built and tested via "Fire Now" in debug panel.
+Still needed:
+- Verify the model actually emits `<defer>` tags in response
+- Make the persona prompt instruction more explicit/prominent
+- Confirm the proactive message appears in chat as the orange ◈ bubble
 
 ---
 
 ## P3 — Distribution
 
-### 11. Real app icon
-`icons/icon.ico` is a 1×1 placeholder pixel. Replace with a real icon.
+### 11. Real app icon ⬜
+`icons/icon.ico` is a 1×1 teal placeholder pixel. Replace before any release.
 
-### 12. macOS support
-- Run `scripts/fetch-sidecars-macos.sh` and verify on macOS M1
-- Test port 18080 availability on macOS
-- Check binary naming conventions for aarch64-apple-darwin
+### 12. macOS support ⬜
+- Run `scripts/fetch-sidecars-macos.sh` and verify on M1/M2
+- Test port 18080 availability
+- Verify aarch64-apple-darwin binary naming
 
-### 13. Production build
-- Remove diagnostic/debug commands (`diagnose_chat_server`, `open_llama_diagnostic`)
-  before shipping, or gate them behind `#[cfg(debug_assertions)]`
-- Test `npm run tauri build` — produces a real installer
-- Verify sidecar bundling in the release package
+### 13. Production build ⬜
+- Gate debug commands behind `#[cfg(debug_assertions)]`
+  (`diagnose_chat_server`, `open_llama_diagnostic`)
+- Test `npm run tauri build` → produces installer
+- Verify sidecar bundling in release package
 
-### 14. Git hygiene
-- Add `.gitattributes` with `* text=auto eol=lf` to stop the CRLF warnings
-- Consider adding `Cargo.lock` to `.gitignore` or keeping it — decide and commit
+### 14. Git hygiene ⬜
+- Add `.gitattributes`: `* text=auto eol=lf` to stop the CRLF warnings on every commit
+- Keep `Cargo.lock` committed (it's a binary app, not a library)
 
 ---
 
-## Architecture items still open (from ARCHITECTURE.md)
+## Architecture items status
 
 | Item | Status |
 |------|--------|
-| Proactive `<defer>` tags | Scheduler built, model cooperation needed |
-| Semantic distillation | Stub — needs LLM extraction impl |
-| Voice pipeline (full loop) | Parts built, not wired end-to-end |
-| Fine-tune management | Placeholder row in Models tab |
-| Kokoro TTS | Placeholder binary |
-| macOS Metal backend | Fetch script written, untested |
+| Chat inference | ✅ working (CPU binary + Vulkan DLLs, port 18080) |
+| Vector memory (episodic) | ✅ working (LanceDB + nomic-embed-text) |
+| Semantic distillation | ✅ implemented, runs every 10 min |
+| Context assembly | ✅ working, overflow trimming added |
+| Proactive `<defer>` tags | ✅ scheduler built, needs model output testing |
+| Voice input (mic → STT → chat) | ✅ wired, whisper exit issue under investigation |
+| Kokoro TTS | ⬜ placeholder binary |
+| Streaming responses | ✅ working |
+| Debug panel | ✅ fully working |
+| System requirements check | ✅ auto-installs VCRedist |
+| Model hot-swap | ✅ working |
+| Model parameters | ✅ temperature/top-p/context in UI |
+| Chat history persistence | ✅ localStorage |
+| macOS Metal backend | ⬜ fetch script written, untested |
+| Fine-tune management | ⬜ placeholder row in Models tab |
