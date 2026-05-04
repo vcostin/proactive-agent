@@ -149,38 +149,24 @@ $ttsExeDest = Join-Path $KokoroBinDir "kokoro-server-x86_64-pc-windows-msvc.exe"
 if (Test-Path $ttsExeDest) {
     Write-Host "  OK kokoro-server.exe (already present)"
 } else {
-    Write-Host "  Downloading sherpa-onnx TTS server..."
+    # sherpa-onnx ships standalone .exe binaries (not a server).
+    # We use the non-streaming TTS CLI directly as a subprocess from Rust.
+    Write-Host "  Downloading sherpa-onnx TTS binary..."
     $sherpaRelease = Invoke-RestMethod "https://api.github.com/repos/k2-fsa/sherpa-onnx/releases/latest" -Headers $headers
     Write-Host "      Release: $($sherpaRelease.tag_name)"
 
+    # Asset is named like: sherpa-onnx-non-streaming-tts-x64-v1.13.0.exe
     $sherpaAsset = $sherpaRelease.assets |
-        Where-Object { $_.name -match "sherpa-onnx-v.*-win-x64\.tar\.bz2$" } |
+        Where-Object { $_.name -match "sherpa-onnx-non-streaming-tts-x64.*\.exe$" } |
         Select-Object -First 1
 
     if (-not $sherpaAsset) {
-        Write-Warning "sherpa-onnx Windows release not found. TTS will be unavailable."
-        Write-Warning "Download manually: https://github.com/k2-fsa/sherpa-onnx/releases"
+        Write-Warning "sherpa-onnx TTS binary not found."
+        Write-Warning "Download manually from: https://github.com/k2-fsa/sherpa-onnx/releases"
+        Write-Warning "Rename to: $ttsExeDest"
     } else {
-        $tmpTts = "$env:TEMP\sherpa-onnx.tar.bz2"
-        Download-File $sherpaAsset.browser_download_url $tmpTts
-
-        # Extract tar.bz2 (requires tar available in Windows 10+)
-        Remove-Item "$env:TEMP\sherpa-extract" -Recurse -Force -ErrorAction SilentlyContinue
-        New-Item -ItemType Directory -Force -Path "$env:TEMP\sherpa-extract" | Out-Null
-        tar -xjf $tmpTts -C "$env:TEMP\sherpa-extract" 2>$null
-
-        $serverExe = Get-ChildItem "$env:TEMP\sherpa-extract" -Recurse -Filter "sherpa-onnx-offline-tts-server.exe" |
-            Select-Object -First 1
-
-        if ($serverExe) {
-            Copy-Item $serverExe.FullName $ttsExeDest -Force
-            # Copy all DLLs from the same directory
-            Get-ChildItem $serverExe.Directory -Filter "*.dll" |
-                ForEach-Object { Copy-Item $_.FullName $KokoroBinDir -Force }
-            Write-Host "  OK sherpa-onnx TTS server"
-        } else {
-            Write-Warning "sherpa-onnx-offline-tts-server.exe not found in archive."
-        }
+        Download-File $sherpaAsset.browser_download_url $ttsExeDest
+        Write-Host "  OK sherpa-onnx TTS binary (CLI mode, no server needed)"
     }
 }
 

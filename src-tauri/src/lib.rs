@@ -331,18 +331,15 @@ fn spawn_sidecars(config: SharedConfig, event_log: SharedEventLog, chat_child: S
         // TTS via sherpa-onnx (piper voice model)
         let tts_model = cfg_models_dir.join("tts").join("en_US-lessac-medium.onnx");
         let tts_tokens = cfg_models_dir.join("tts").join("en_US-lessac-medium.onnx.json");
-        if tts_model.exists() {
-            // sherpa-onnx piper/vits model uses --vits-model and --vits-tokens
-            spawn_direct("kokoro-server", "kokoro (sherpa-onnx TTS)",
-                vec!["--vits-model".into(), tts_model.to_string_lossy().into_owned(),
-                     "--vits-tokens".into(), tts_tokens.to_string_lossy().into_owned(),
-                     "--port".into(), kokoro_port.to_string(),
-                     "--num-threads".into(), "2".into()],
-                event_log.clone());
+        // TTS (sherpa-onnx) runs as a subprocess per request, not as a persistent server.
+        // TtsClient.synthesise_via_cli() calls the binary directly — no HTTP server needed.
+        let tts_bin = crate::find_sidecar("kokoro-server");
+        if tts_bin.is_some() && tts_model.exists() {
+            monitor::push_event(&event_log, "[ADAPTER]", "TTS (sherpa-onnx) ready — subprocess mode");
         } else {
-            monitor::push_event(&event_log, "[ADAPTER]",
-                "TTS model not found — run: npm run setup (skipping kokoro)");
+            monitor::push_event(&event_log, "[ADAPTER]", "TTS unavailable — run: npm run setup");
         }
+        let _ = kokoro_port; // port unused in subprocess mode
     });
 }
 
