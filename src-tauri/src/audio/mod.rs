@@ -1,8 +1,3 @@
-// Audio pipeline — built but not yet wired to the UI mic toggle.
-// Dead-code warnings are suppressed intentionally; these modules are
-// complete and will be connected when the voice toggle is implemented.
-#![allow(dead_code, unused_imports)]
-
 pub mod capture;
 pub mod stt;
 pub mod tts;
@@ -12,53 +7,55 @@ pub use stt::SttClient;
 pub use tts::TtsClient;
 
 use anyhow::Result;
+use tauri::Emitter;
 use tokio::sync::mpsc;
 
-/// Channel buffer for audio frames between capture and STT.
 const AUDIO_CHANNEL_BUF: usize = 128;
+const SILENCE_MS: u64 = 500;
 
-/// Convenience wrapper — starts capture and returns the capture handle plus
-/// the channel receiver the STT loop should read from.
-pub fn start_capture() -> Result<(AudioCapture, mpsc::Receiver<Vec<f32>>)> {
-    let (tx, rx) = mpsc::channel(AUDIO_CHANNEL_BUF);
-    let capture = AudioCapture::start(tx)?;
-    Ok((capture, rx))
+/// Holds the running audio capture. Dropping this stops the mic stream
+/// and closes the audio channel, which shuts down the STT loop.
+pub struct VoiceHandle {
+    pub capture: AudioCapture,
 }
 
-/// Background STT loop: accumulates audio frames while VAD is active, then
-/// sends the batch to Whisper when silence is detected.
-/// EXTEND Phase 4: route transcript into orchestrator.send_message()
+/// Start mic capture. Returns the handle (keeps stream alive) and the
+/// audio frame receiver (pass to run_stt_loop).
+pub fn start_capture() -> Result<(VoiceHandle, mpsc::Receiver<Vec<f32>>)> {
+    let (tx, rx) = mpsc::channel(AUDIO_CHANNEL_BUF);
+    let capture = AudioCapture::start(tx)?;
+    Ok((VoiceHandle { capture }, rx))
+}
+
+/// Run the STT loop: accumulate VAD frames, transcribe on silence,
+/// emit `voice_transcript` events to the frontend.
+/// Exits when the audio channel closes (i.e. VoiceHandle is dropped).
 pub async fn run_stt_loop(
     mut audio_rx: mpsc::Receiver<Vec<f32>>,
-    stt: SttClient,
+    whisper_port: u16,
     sample_rate: u32,
     channels: u16,
+    app_handle: tauri::AppHandle,
 ) {
-    const SILENCE_DRAIN_MS: u64 = 400;
+    let stt = SttClient::new(whisper_port);
     let mut buffer: Vec<f32> = Vec::new();
 
     loop {
         match tokio::time::timeout(
-            std::time::Duration::from_millis(SILENCE_DRAIN_MS),
+            std::time::Duration::from_millis(SILENCE_MS),
             audio_rx.recv(),
-        )
-        .await
-        {
-            Ok(Some(frame)) => {
-                // Receiving frames — VAD active, accumulate
-                buffer.extend_from_slice(&frame);
-            }
-            Ok(None) => break, // channel closed
+        ).await {
+            Ok(Some(frame)) => buffer.extend_from_slice(&frame),
+            Ok(None) => break, // channel closed — VoiceHandle was dropped
             Err(_) => {
-                // Timeout = silence gap — send accumulated audio if any
-                if !buffer.is_empty() {
+                // Silence gap — transcribe accumulated audio
+                if buffer.len() > sample_rate as usize / 4 { // at least 250ms of audio
                     match stt.transcribe(&buffer, sample_rate, channels).await {
                         Ok(text) if !text.is_empty() => {
-                            // EXTEND: send `text` to orchestrator
-                            println!("[STT] transcript: {text}");
+                            let _ = app_handle.emit("voice_transcript", text);
                         }
                         Ok(_) => {}
-                        Err(e) => eprintln!("[STT] error: {e}"),
+                        Err(e) => eprintln!("[STT] transcribe error: {e}"),
                     }
                     buffer.clear();
                 }

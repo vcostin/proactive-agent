@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use chrono::Utc;
 use futures::StreamExt;
@@ -9,7 +10,7 @@ use tauri_plugin_dialog::DialogExt;
 use crate::monitor::{AudioState, MemoryStats, ModelInfo, SystemStatus};
 use crate::orchestrator::context::AssembledContext;
 use crate::monitor::SharedEventLog;
-use crate::{SharedChatChild, SharedConfig, SharedOrchestrator, SharedScheduler};
+use crate::{SharedChatChild, SharedConfig, SharedOrchestrator, SharedScheduler, SharedVoiceStop};
 
 type CmdResult<T> = Result<T, String>;
 
@@ -138,6 +139,74 @@ pub async fn download_required_models(
         });
     }
 
+    Ok(())
+}
+
+// ── Voice input ───────────────────────────────────────────────────────────────
+
+/// Start microphone capture and STT loop.
+/// cpal::Stream is !Send on WASAPI so we keep it on a dedicated std::thread.
+/// Transcripts arrive as `voice_transcript` Tauri events.
+#[tauri::command]
+pub async fn start_voice_input(
+    config: State<'_, SharedConfig>,
+    voice_stop: State<'_, SharedVoiceStop>,
+    app_handle: tauri::AppHandle,
+) -> CmdResult<()> {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    // Stop any existing recording
+    if let Ok(mut g) = voice_stop.inner().lock() {
+        if let Some(flag) = g.take() {
+            flag.store(true, Ordering::Relaxed);
+        }
+    }
+
+    let (tx, rx) = tokio::sync::mpsc::channel::<Vec<f32>>(128);
+    let stop_flag = Arc::new(AtomicBool::new(false));
+    let stop_clone = stop_flag.clone();
+
+    // audio capture: stays on its own thread (cpal::Stream is !Send on WASAPI)
+    let thread_result = std::thread::Builder::new()
+        .name("audio-capture".into())
+        .spawn(move || {
+            match crate::audio::capture::AudioCapture::start(tx) {
+                Ok(capture) => {
+                    eprintln!("[AUDIO] capture started: {} Hz, {} ch", capture.sample_rate, capture.channels);
+                    // Block until stop is signalled; dropping `capture` closes the channel
+                    while !stop_clone.load(Ordering::Relaxed) {
+                        std::thread::sleep(std::time::Duration::from_millis(50));
+                    }
+                    eprintln!("[AUDIO] capture stopped");
+                }
+                Err(e) => eprintln!("[AUDIO] capture failed: {e}"),
+            }
+        });
+
+    if let Err(e) = thread_result {
+        return Err(format!("failed to spawn audio thread: {e}"));
+    }
+
+    // Store stop flag so stop_voice_input can signal the thread
+    if let Ok(mut g) = voice_stop.inner().lock() {
+        *g = Some(stop_flag);
+    }
+
+    let whisper_port = config.read().await.whisper_port;
+    // STT loop runs in async context — exits when channel closes (thread drops capture)
+    tauri::async_runtime::spawn(crate::audio::run_stt_loop(rx, whisper_port, 16000, 1, app_handle));
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn stop_voice_input(voice_stop: State<'_, SharedVoiceStop>) -> CmdResult<()> {
+    use std::sync::atomic::Ordering;
+    if let Ok(mut g) = voice_stop.inner().lock() {
+        if let Some(flag) = g.take() {
+            flag.store(true, Ordering::Relaxed);
+        }
+    }
     Ok(())
 }
 

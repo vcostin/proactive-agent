@@ -1,3 +1,4 @@
+import { invoke } from '@tauri-apps/api/core';
 import { KeyboardEvent, useCallback, useEffect, useRef, useState } from 'react';
 import { useChat } from '../../hooks/useChat';
 import { useLlamaReady } from '../../hooks/useLlamaReady';
@@ -15,6 +16,22 @@ export function ChatWindow({ modelName, onModelClick }: Props) {
   const llamaReady = useLlamaReady();
   const [input, setInput] = useState('');
   const [listening, setListening] = useState(false);
+  const [micError, setMicError] = useState<string | null>(null);
+
+  const toggleListening = useCallback(async () => {
+    setMicError(null);
+    if (listening) {
+      await invoke('stop_voice_input').catch(() => {});
+      setListening(false);
+    } else {
+      try {
+        await invoke('start_voice_input');
+        setListening(true);
+      } catch (e) {
+        setMicError(String(e));
+      }
+    }
+  }, [listening]);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   const handleProactive = useCallback(
@@ -66,15 +83,15 @@ export function ChatWindow({ modelName, onModelClick }: Props) {
         <div style={{ flex: 1 }} />
         <WaveformVisualizer isActive={listening} energyLevel={listening ? 0.6 : 0} />
         <button
-          onClick={() => setListening(l => !l)}
+          onClick={toggleListening}
           style={{
             padding: '3px 10px', fontSize: 11,
-            borderColor: listening ? 'var(--accent)' : 'var(--border)',
-            color: listening ? 'var(--accent)' : 'var(--text-muted)',
+            borderColor: listening ? 'var(--accent)' : micError ? 'var(--error)' : 'var(--border)',
+            color: listening ? 'var(--accent)' : micError ? 'var(--error)' : 'var(--text-muted)',
           }}
-          title="Toggle voice input"
+          title={micError ?? (listening ? 'Stop listening' : 'Start voice input')}
         >
-          {listening ? '🎙 listening' : '🎙'}
+          {listening ? '🎙 listening' : micError ? '🎙 error' : '🎙'}
         </button>
       </div>
 

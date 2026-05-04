@@ -34,13 +34,25 @@ export function useChat() {
   // Subscribe to streaming token events
   useEffect(() => {
     let unlistenToken: (() => void) | null = null;
+    let unlistenVoice: (() => void) | null = null;
     let cancelled = false;
 
     listen<string>('chat_token', e => {
       if (!cancelled) setStreamingText(prev => (prev ?? '') + e.payload);
     }).then(fn => { if (cancelled) fn(); else unlistenToken = fn; });
 
-    return () => { cancelled = true; unlistenToken?.(); };
+    // Voice transcripts route into sendMessage just like keyboard input
+    listen<string>('voice_transcript', e => {
+      if (!cancelled && e.payload.trim()) sendMessage(e.payload.trim());
+    }).then(fn => { if (cancelled) fn(); else unlistenVoice = fn; });
+
+    return () => {
+      cancelled = true;
+      unlistenToken?.();
+      unlistenVoice?.();
+    };
+  // sendMessage is stable (wrapped in useCallback) so this effect only runs once
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const sendMessage = useCallback(async (text: string) => {

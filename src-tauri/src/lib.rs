@@ -17,6 +17,8 @@ pub type SharedConfig = Arc<RwLock<AppConfig>>;
 pub type SharedOrchestrator = Arc<Mutex<Option<Orchestrator>>>;
 pub type SharedScheduler = Arc<Mutex<ProactivityScheduler>>;
 pub type SharedChatChild = Arc<Mutex<Option<tokio::process::Child>>>;
+/// Stop signal for the voice capture thread. None = not recording.
+pub type SharedVoiceStop = Arc<std::sync::Mutex<Option<Arc<std::sync::atomic::AtomicBool>>>>;
 
 pub fn run() {
     tauri::Builder::default()
@@ -41,12 +43,14 @@ pub fn run() {
             let scheduler: SharedScheduler = Arc::new(Mutex::new(ProactivityScheduler::new()));
             let event_log: SharedEventLog = new_event_log();
             let chat_child: SharedChatChild = Arc::new(Mutex::new(None));
+            let voice_stop: SharedVoiceStop = Arc::new(std::sync::Mutex::new(None));
 
             app.manage(config.clone());
             app.manage(orchestrator.clone());
             app.manage(scheduler.clone());
             app.manage(event_log.clone());
             app.manage(chat_child.clone());
+            app.manage(voice_stop.clone());
 
             spawn_sidecars(config.clone(), event_log.clone(), chat_child.clone());
 
@@ -113,6 +117,8 @@ pub fn run() {
             commands::list_models,
             commands::get_debug_events,
             commands::diagnose_chat_server,
+            commands::start_voice_input,
+            commands::stop_voice_input,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -280,10 +286,11 @@ fn spawn_sidecars(config: SharedConfig, event_log: SharedEventLog, chat_child: S
                  "--alias".into(), "nomic-embed-text".into()],
             event_log.clone());
 
-        // whisper-server uses -p for port (not --port)
         spawn_direct("whisper-server", "whisper",
             vec!["-m".into(), whisper_path,
-                 "-p".into(), whisper_port.to_string()],
+                 "-p".into(), whisper_port.to_string(),
+                 "-H".into(), "127.0.0.1".into(),
+                 "-t".into(), "4".into()],
             event_log.clone());
 
         spawn_direct("kokoro-server", "kokoro",
