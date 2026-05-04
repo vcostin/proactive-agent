@@ -6,7 +6,7 @@ Current state: chat works, memory works, debug panel works, sidecar management w
 
 ## P1 — Core gaps (do these first)
 
-### 1. Voice input wiring
+### ~~1. Voice input wiring~~ ✅ DONE
 `AudioCapture` and `SttClient` are fully built in Phase 4 but not connected to the UI.
 
 - Start audio capture when user clicks the 🎙 toggle in `ChatWindow`
@@ -14,7 +14,7 @@ Current state: chat works, memory works, debug panel works, sidecar management w
 - Route transcript into `send_message` instead of keyboard input
 - Show VAD energy bar live via `useSystemStatus` (AudioState already has `energy_level`)
 
-### 2. Whisper-server port binding
+### 2. Whisper-server port binding — in progress, testing -H and -t flags
 Whisper loads the model and uses GPU but exits after load. Needs investigation:
 - Check if `-p 18082` is the correct argument format for this whisper build
 - Try `--port 18082` vs `-p 18082` vs other variants
