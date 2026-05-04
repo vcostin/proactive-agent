@@ -116,16 +116,15 @@ if (-not $whisperAsset) {
 # ─── 3. Models ────────────────────────────────────────────────────────────────
 Write-Host "`n[3/4] Models"
 
-# Whisper small English model (~466 MB) — better accent handling than base
-# Change to ggml-base.en.bin (~142 MB) if disk space is tight
-$whisperModel = Join-Path $ModelsDir "ggml-small.en.bin"
+# Whisper medium English model (~1.5 GB) — significantly better with accents
+$whisperModel = Join-Path $ModelsDir "ggml-medium.en.bin"
 if (-not (Test-Path $whisperModel)) {
-    Write-Host "  Downloading ggml-small.en.bin (~466 MB, better accent support)..."
+    Write-Host "  Downloading ggml-medium.en.bin (~1.5 GB)..."
     Download-File `
-        "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin" `
+        "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.en.bin" `
         $whisperModel
-    Write-Host "  OK ggml-small.en.bin"
-} else { Write-Host "  OK ggml-small.en.bin (already present)" }
+    Write-Host "  OK ggml-medium.en.bin"
+} else { Write-Host "  OK ggml-medium.en.bin (already present)" }
 
 # nomic-embed-text embedding model (~274 MB)
 $embedModel = Join-Path $ModelsDir "nomic-embed-text-v1.5.Q8_0.gguf"
