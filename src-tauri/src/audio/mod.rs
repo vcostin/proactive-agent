@@ -81,8 +81,8 @@ pub async fn run_stt_loop(
             Ok(Some(frame)) => buffer.extend_from_slice(&frame),
             Ok(None) => break, // channel closed
             Err(_) => {
-                // Silence gap — require at least 1 second of audio before transcribing
-                let min_samples = sample_rate as usize; // 1 second
+                // Silence gap — require at least 0.4s of audio (avoids blank clips)
+                let min_samples = sample_rate as usize * 2 / 5; // 0.4 seconds
                 if buffer.len() >= min_samples {
                     match stt.transcribe(&buffer, sample_rate, channels).await {
                         Ok(text) => {

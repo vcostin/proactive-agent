@@ -6,9 +6,10 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 
 /// RMS level above which audio is considered speech.
-/// 0.01 was too low — picked up ambient noise and music.
-/// 0.03 works for typical indoor microphones at normal distance.
-const VAD_THRESHOLD: f32 = 0.03;
+/// 0.01 → too sensitive (ambient noise triggers it)
+/// 0.03 → too aggressive (clips quiet consonants at word start)
+/// 0.015 → better balance for typical laptop/headset mics
+const VAD_THRESHOLD: f32 = 0.015;
 
 pub struct AudioCapture {
     /// Kept alive — stream stops when this is dropped.
