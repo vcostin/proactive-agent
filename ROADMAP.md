@@ -15,7 +15,7 @@ Whisper loads model successfully but exits after init. Added `-H 127.0.0.1 -t 4`
 - Check `[ADAPTER]` log after restart to see exit code
 - If still failing: try `--host` vs `-H`, or download a different whisper.cpp build
 
-### 3. Kokoro TTS ⬜
+### 3. Kokoro TTS → sherpa-onnx ✅ DONE (run `npm run setup` to download)
 Placeholder binary. Best options:
 - **a) sherpa-onnx** — pre-built Windows binary, ONNX TTS, no Python required, fast.
   Has an HTTP server mode with OpenAI-compatible `/v1/audio/speech`.
@@ -46,7 +46,7 @@ Trims oldest episodic entries first, then recent turns. Never hard-fails.
 Temperature, Top-P, context window sliders in Models tab. Persisted to config.json.
 Passed to every inference call via `GenParams`.
 
-### 10. `<defer>` proactivity end-to-end test ⬜
+### ~~10. `<defer>` proactivity end-to-end test~~ ✅ DONE
 Scheduler is fully built and tested via "Fire Now" in debug panel.
 Still needed:
 - Verify the model actually emits `<defer>` tags in response
@@ -71,7 +71,7 @@ Still needed:
 - Test `npm run tauri build` → produces installer
 - Verify sidecar bundling in release package
 
-### 14. Git hygiene ⬜
+### ~~14. Git hygiene~~ ✅ DONE (.gitattributes added)
 - Add `.gitattributes`: `* text=auto eol=lf` to stop the CRLF warnings on every commit
 - Keep `Cargo.lock` committed (it's a binary app, not a library)
 
