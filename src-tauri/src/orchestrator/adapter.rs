@@ -109,7 +109,7 @@ impl LlamaCppAdapter {
         #[derive(Deserialize)]
         struct StreamEvent { choices: Vec<StreamChoice>, timings: Option<Timings> }
         #[derive(Deserialize)]
-        struct StreamChoice { delta: Delta, finish_reason: Option<String> }
+        struct StreamChoice { delta: Delta, #[allow(dead_code)] finish_reason: Option<String> }
         #[derive(Deserialize)]
         struct Delta { content: Option<String> }
         #[derive(Deserialize)]

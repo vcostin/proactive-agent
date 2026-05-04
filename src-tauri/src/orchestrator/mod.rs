@@ -200,10 +200,12 @@ impl Orchestrator {
 }
 
 /// Strip `<defer>` tag and parse its JSON payload.
-/// Lenient: if JSON is malformed the tag is discarded and logged, not errored.
+/// Handles both `<defer>{...}</defer>` (proper) and `<defer>{...}` (no closing tag —
+/// models often omit the closing tag). JSON must start with `{`.
 fn parse_defer(response: &str) -> (String, Option<DeferredMessage>) {
     let re = DEFER_RE.get_or_init(|| {
-        Regex::new(r"(?s)<defer>(.*?)</defer>").expect("static regex is valid")
+        // Match <defer> followed by JSON up to </defer> or end-of-string
+        Regex::new(r"(?s)<defer>\s*(\{.*?\})(?:\s*</defer>|$|\n)").expect("static regex is valid")
     });
 
     if let Some(caps) = re.captures(response) {

@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use anyhow::Result;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use reqwest::Client;
