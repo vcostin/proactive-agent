@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { KeyboardEvent, useCallback, useEffect, useRef, useState } from 'react';
+import { useAudioEnergy } from '../../hooks/useAudioEnergy';
 import { useChat } from '../../hooks/useChat';
 import { useLlamaReady } from '../../hooks/useLlamaReady';
 import { useProactiveEvents } from '../../hooks/useProactiveEvents';
@@ -17,6 +18,7 @@ export function ChatWindow({ modelName, onModelClick }: Props) {
   const [input, setInput] = useState('');
   const [listening, setListening] = useState(false);
   const [micError, setMicError] = useState<string | null>(null);
+  const micEnergy = useAudioEnergy(listening);
 
   const toggleListening = useCallback(async () => {
     setMicError(null);
@@ -88,7 +90,7 @@ export function ChatWindow({ modelName, onModelClick }: Props) {
           clear
         </button>
         <div style={{ flex: 1 }} />
-        <WaveformVisualizer isActive={listening} energyLevel={listening ? 0.6 : 0} />
+        <WaveformVisualizer isActive={listening} energyLevel={micEnergy} />
         <button
           onClick={toggleListening}
           style={{

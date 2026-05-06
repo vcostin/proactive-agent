@@ -21,6 +21,8 @@ pub type SharedChatChild = Arc<Mutex<Option<tokio::process::Child>>>;
 pub type SharedVoiceStop = Arc<std::sync::Mutex<Option<Arc<std::sync::atomic::AtomicBool>>>>;
 /// PIDs of all spawned sidecar processes — killed on app exit so DLLs are released.
 pub type SharedProcessPids = Arc<std::sync::Mutex<Vec<u32>>>;
+/// Live microphone energy (RMS as f32 bits) — updated by the capture thread, read by UI.
+pub type SharedAudioEnergy = Arc<std::sync::atomic::AtomicU32>;
 
 pub fn run() {
     tauri::Builder::default()
@@ -47,6 +49,7 @@ pub fn run() {
             let chat_child: SharedChatChild = Arc::new(Mutex::new(None));
             let voice_stop: SharedVoiceStop = Arc::new(std::sync::Mutex::new(None));
             let process_pids: SharedProcessPids = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let audio_energy: SharedAudioEnergy = Arc::new(std::sync::atomic::AtomicU32::new(0));
 
             app.manage(config.clone());
             app.manage(orchestrator.clone());
@@ -55,6 +58,7 @@ pub fn run() {
             app.manage(chat_child.clone());
             app.manage(voice_stop.clone());
             app.manage(process_pids.clone());
+            app.manage(audio_energy.clone());
 
             spawn_sidecars(config.clone(), event_log.clone(), chat_child.clone(), process_pids.clone());
 
@@ -147,6 +151,7 @@ pub fn run() {
             commands::diagnose_chat_server,
             commands::start_voice_input,
             commands::stop_voice_input,
+            commands::get_audio_energy,
         ])
         .build(tauri::generate_context!())
         .expect("error building tauri application")

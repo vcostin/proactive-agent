@@ -97,7 +97,8 @@ pub struct VoiceHandle {
 /// audio frame receiver (pass to run_stt_loop).
 pub fn start_capture() -> Result<(VoiceHandle, mpsc::Receiver<Vec<f32>>)> {
     let (tx, rx) = mpsc::channel(AUDIO_CHANNEL_BUF);
-    let capture = AudioCapture::start(tx)?;
+    // Use a throwaway energy arc here — start_capture is not the live voice path
+    let capture = AudioCapture::start(tx, std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)))?;
     Ok((VoiceHandle { capture }, rx))
 }
 

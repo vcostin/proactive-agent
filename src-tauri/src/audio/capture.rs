@@ -23,9 +23,9 @@ pub struct AudioCapture {
 }
 
 impl AudioCapture {
-    /// Start mic capture and pipe speech frames into `audio_tx`.
-    /// Frames are only sent when VAD is active — silence is dropped.
-    pub fn start(audio_tx: mpsc::Sender<Vec<f32>>) -> Result<Self> {
+    /// Start mic capture. `energy_out` is updated continuously with the current
+    /// RMS level so the UI can animate a live waveform without polling the struct.
+    pub fn start(audio_tx: mpsc::Sender<Vec<f32>>, energy_out: Arc<AtomicU32>) -> Result<Self> {
         let host = cpal::default_host();
         let device = host
             .default_input_device()
@@ -46,6 +46,8 @@ impl AudioCapture {
         let energy_bits = Arc::new(AtomicU32::new(0));
         let vad_clone = vad_active.clone();
         let energy_clone = energy_bits.clone();
+        // Also update the shared energy so the UI can animate in real-time
+        let energy_shared = energy_out;
 
         let stream = device
             .build_input_stream::<f32, _, _>(
@@ -56,6 +58,7 @@ impl AudioCapture {
                         .sqrt();
 
                     energy_clone.store(rms.to_bits(), Ordering::Relaxed);
+                    energy_shared.store(rms.to_bits(), Ordering::Relaxed);
                     let speech = rms > VAD_THRESHOLD;
                     vad_clone.store(speech, Ordering::Relaxed);
 

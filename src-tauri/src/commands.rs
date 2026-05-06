@@ -10,7 +10,7 @@ use tauri_plugin_dialog::DialogExt;
 use crate::monitor::{AudioState, MemoryStats, ModelInfo, SystemStatus};
 use crate::orchestrator::context::AssembledContext;
 use crate::monitor::SharedEventLog;
-use crate::{SharedChatChild, SharedConfig, SharedOrchestrator, SharedProcessPids, SharedScheduler, SharedVoiceStop};
+use crate::{SharedAudioEnergy, SharedChatChild, SharedConfig, SharedOrchestrator, SharedProcessPids, SharedScheduler, SharedVoiceStop};
 
 type CmdResult<T> = Result<T, String>;
 
@@ -151,6 +151,7 @@ pub async fn download_required_models(
 pub async fn start_voice_input(
     config: State<'_, SharedConfig>,
     voice_stop: State<'_, SharedVoiceStop>,
+    audio_energy: State<'_, SharedAudioEnergy>,
     app_handle: tauri::AppHandle,
 ) -> CmdResult<()> {
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -168,12 +169,13 @@ pub async fn start_voice_input(
 
     // Channel to get the actual sample rate/channels back from the audio thread
     let (cfg_tx, cfg_rx) = std::sync::mpsc::channel::<(u32, u16)>();
+    let energy_arc = audio_energy.inner().clone();
 
     // audio capture: stays on its own thread (cpal::Stream is !Send on WASAPI)
     let thread_result = std::thread::Builder::new()
         .name("audio-capture".into())
         .spawn(move || {
-            match crate::audio::capture::AudioCapture::start(tx) {
+            match crate::audio::capture::AudioCapture::start(tx, energy_arc) {
                 Ok(capture) => {
                     let sr = capture.sample_rate;
                     let ch = capture.channels;
@@ -209,14 +211,26 @@ pub async fn start_voice_input(
     Ok(())
 }
 
+/// Current mic energy level (0.0–1.0) for the waveform visualiser.
 #[tauri::command]
-pub async fn stop_voice_input(voice_stop: State<'_, SharedVoiceStop>) -> CmdResult<()> {
+pub fn get_audio_energy(energy: State<'_, SharedAudioEnergy>) -> f32 {
+    use std::sync::atomic::Ordering;
+    f32::from_bits(energy.load(Ordering::Relaxed))
+}
+
+#[tauri::command]
+pub async fn stop_voice_input(
+    voice_stop: State<'_, SharedVoiceStop>,
+    energy: State<'_, SharedAudioEnergy>,
+) -> CmdResult<()> {
     use std::sync::atomic::Ordering;
     if let Ok(mut g) = voice_stop.inner().lock() {
         if let Some(flag) = g.take() {
             flag.store(true, Ordering::Relaxed);
         }
     }
+    // Reset energy to 0 when mic stops
+    energy.store(0u32, Ordering::Relaxed);
     Ok(())
 }
 
