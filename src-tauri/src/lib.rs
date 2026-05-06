@@ -19,6 +19,8 @@ pub type SharedScheduler = Arc<Mutex<ProactivityScheduler>>;
 pub type SharedChatChild = Arc<Mutex<Option<tokio::process::Child>>>;
 /// Stop signal for the voice capture thread. None = not recording.
 pub type SharedVoiceStop = Arc<std::sync::Mutex<Option<Arc<std::sync::atomic::AtomicBool>>>>;
+/// PIDs of all spawned sidecar processes — killed on app exit so DLLs are released.
+pub type SharedProcessPids = Arc<std::sync::Mutex<Vec<u32>>>;
 
 pub fn run() {
     tauri::Builder::default()
@@ -44,6 +46,7 @@ pub fn run() {
             let event_log: SharedEventLog = new_event_log();
             let chat_child: SharedChatChild = Arc::new(Mutex::new(None));
             let voice_stop: SharedVoiceStop = Arc::new(std::sync::Mutex::new(None));
+            let process_pids: SharedProcessPids = Arc::new(std::sync::Mutex::new(Vec::new()));
 
             app.manage(config.clone());
             app.manage(orchestrator.clone());
@@ -51,8 +54,9 @@ pub fn run() {
             app.manage(event_log.clone());
             app.manage(chat_child.clone());
             app.manage(voice_stop.clone());
+            app.manage(process_pids.clone());
 
-            spawn_sidecars(config.clone(), event_log.clone(), chat_child.clone());
+            spawn_sidecars(config.clone(), event_log.clone(), chat_child.clone(), process_pids.clone());
 
             // Run requirements check at every startup and emit the result so the
             // frontend can show a fix prompt even when the wizard is already done.
@@ -144,8 +148,59 @@ pub fn run() {
             commands::start_voice_input,
             commands::stop_voice_input,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error building tauri application")
+        .run(|app_handle, event| {
+            if let tauri::RunEvent::Exit = event {
+                kill_all_sidecars(app_handle);
+            }
+        });
+}
+
+/// Kill every tracked sidecar process so DLLs are released and ports freed.
+/// Called on app exit — ensures `npm run setup` works without closing manually.
+fn kill_all_sidecars(app_handle: &tauri::AppHandle) {
+    use tauri::Manager;
+
+    // Kill chat server via stored child handle
+    if let Some(pids) = app_handle.try_state::<SharedProcessPids>() {
+        if let Ok(list) = pids.inner().lock() {
+            for &pid in list.iter() {
+                if pid == 0 { continue; }
+                #[cfg(target_os = "windows")]
+                {
+                    // /F = force, /T = kill child tree
+                    let _ = std::process::Command::new("taskkill")
+                        .args(["/F", "/T", "/PID", &pid.to_string()])
+                        .spawn();
+                }
+                #[cfg(not(target_os = "windows"))]
+                {
+                    let _ = std::process::Command::new("kill")
+                        .args(["-9", &pid.to_string()])
+                        .spawn();
+                }
+            }
+        }
+    }
+
+    // Also kill the chat server via its stored child handle
+    if let Some(chat) = app_handle.try_state::<SharedChatChild>() {
+        if let Ok(mut guard) = chat.inner().try_lock() {
+            if let Some(ref mut child) = *guard {
+                if let Some(pid) = child.id() {
+                    #[cfg(target_os = "windows")]
+                    let _ = std::process::Command::new("taskkill")
+                        .args(["/F", "/T", "/PID", &pid.to_string()])
+                        .spawn();
+                    #[cfg(not(target_os = "windows"))]
+                    let _ = std::process::Command::new("kill")
+                        .args(["-9", &pid.to_string()])
+                        .spawn();
+                }
+            }
+        }
+    }
 }
 
 // ── Process helpers ───────────────────────────────────────────────────────────
@@ -225,6 +280,7 @@ pub fn start_chat_server(
     port: u16,
     event_log: SharedEventLog,
     chat_child: SharedChatChild,
+    pids: SharedProcessPids,
 ) {
     tauri::async_runtime::spawn(async move {
         {
@@ -261,8 +317,11 @@ pub fn start_chat_server(
 
         match spawn_result {
             Ok(mut child) => {
+                let pid = child.id().unwrap_or(0);
                 monitor::push_event(&event_log, "[ADAPTER]",
-                    format!("llama (chat) started (pid {:?})", child.id()));
+                    format!("llama (chat) started (pid {pid})"));
+                // Register PID for graceful shutdown
+                if let Ok(mut list) = pids.lock() { list.push(pid); }
                 let stderr = child.stderr.take();
                 let stdout = child.stdout.take();
                 { *chat_child.lock().await = Some(child); }
@@ -290,7 +349,7 @@ pub fn start_chat_server(
     });
 }
 
-fn spawn_sidecars(config: SharedConfig, event_log: SharedEventLog, chat_child: SharedChatChild) {
+fn spawn_sidecars(config: SharedConfig, event_log: SharedEventLog, chat_child: SharedChatChild, pids: SharedProcessPids) {
     tauri::async_runtime::spawn(async move {
         let cfg = config.read().await;
         let chat_model     = cfg.chat_model.clone();
@@ -307,11 +366,9 @@ fn spawn_sidecars(config: SharedConfig, event_log: SharedEventLog, chat_child: S
             monitor::push_event(&event_log, "[ADAPTER]",
                 "chat model not configured — pick one in the Models tab");
         } else {
-            start_chat_server(chat_model, llama_port, event_log.clone(), chat_child);
+            start_chat_server(chat_model, llama_port, event_log.clone(), chat_child, pids.clone());
         }
 
-        // --embedding enables the /v1/embeddings endpoint.
-        // Previously removed due to DLL crashes (now fixed); must be present.
         spawn_direct("llama-server", "llama (embed)",
             vec!["--model".into(), embed_path,
                  "--port".into(), embed_port.to_string(),
@@ -320,13 +377,13 @@ fn spawn_sidecars(config: SharedConfig, event_log: SharedEventLog, chat_child: S
                  "-ngl".into(), "999".into(),
                  "--embedding".into(),
                  "--alias".into(), "nomic-embed-text".into()],
-            event_log.clone());
+            event_log.clone(), pids.clone());
 
         spawn_direct("whisper-server", "whisper",
             vec!["--model".into(), whisper_path,
                  "--port".into(), whisper_port.to_string(),
                  "--host".into(), "127.0.0.1".into()],
-            event_log.clone());
+            event_log.clone(), pids.clone());
 
         // TTS via sherpa-onnx (piper voice model)
         let tts_model = cfg_models_dir.join("tts").join("en_US-lessac-medium.onnx");
@@ -348,6 +405,7 @@ fn spawn_direct(
     display_name: &'static str,
     args: Vec<String>,
     event_log: SharedEventLog,
+    pids: SharedProcessPids,
 ) {
     let binary = match find_sidecar(binary_name) {
         Some(b) => b,
@@ -369,8 +427,11 @@ fn spawn_direct(
 
         match spawn_result {
             Ok(mut child) => {
+                let pid = child.id().unwrap_or(0);
                 monitor::push_event(&event_log, "[ADAPTER]",
-                    format!("{display_name} started (pid {:?})", child.id()));
+                    format!("{display_name} started (pid {pid})"));
+                // Register for graceful shutdown
+                if let Ok(mut list) = pids.lock() { list.push(pid); }
                 let stderr = child.stderr.take();
                 let stdout = child.stdout.take();
 

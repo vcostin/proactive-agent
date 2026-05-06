@@ -10,7 +10,7 @@ use tauri_plugin_dialog::DialogExt;
 use crate::monitor::{AudioState, MemoryStats, ModelInfo, SystemStatus};
 use crate::orchestrator::context::AssembledContext;
 use crate::monitor::SharedEventLog;
-use crate::{SharedChatChild, SharedConfig, SharedOrchestrator, SharedScheduler, SharedVoiceStop};
+use crate::{SharedChatChild, SharedConfig, SharedOrchestrator, SharedProcessPids, SharedScheduler, SharedVoiceStop};
 
 type CmdResult<T> = Result<T, String>;
 
@@ -610,6 +610,7 @@ pub async fn swap_model(
     orchestrator: State<'_, SharedOrchestrator>,
     event_log: State<'_, SharedEventLog>,
     chat_child: State<'_, SharedChatChild>,
+    process_pids: State<'_, SharedProcessPids>,
     app_handle: tauri::AppHandle,
     model_path: String,
 ) -> CmdResult<()> {
@@ -636,6 +637,7 @@ pub async fn swap_model(
         port,
         event_log.inner().clone(),
         chat_child.inner().clone(),
+        process_pids.inner().clone(),
     );
 
     Ok(())
