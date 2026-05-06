@@ -17,7 +17,7 @@ const SILENCE_MS: u64 = 800;
 /// 1.0 = no boost. Too high causes clipping which garbles transcription.
 const MIC_GAIN: f32 = 1.5;
 
-/// Filter out common whisper hallucinations for non-speech audio.
+/// Filter out common STT hallucinations for non-speech audio.
 /// Returns empty string if the transcript should be discarded.
 /// Amplify PCM samples by `gain`, clamped to [-1.0, 1.0] to avoid clipping.
 fn amplify(samples: &[f32], gain: f32) -> Vec<f32> {
@@ -27,7 +27,7 @@ fn amplify(samples: &[f32], gain: f32) -> Vec<f32> {
 /// Downmix stereo→mono and resample to 16000 Hz.
 /// Whisper only processes 16000 Hz mono — sending 48000 Hz stereo
 /// makes it hear everything at 3× wrong speed and in double.
-fn prepare_for_whisper(samples: &[f32], sample_rate: u32, channels: u16) -> Vec<f32> {
+fn prepare_for_stt(samples: &[f32], sample_rate: u32, channels: u16) -> Vec<f32> {
     // Step 1: downmix to mono
     let mono: Vec<f32> = if channels <= 1 {
         samples.to_vec()
@@ -126,12 +126,10 @@ pub async fn run_stt_loop(
                 // Silence gap — require at least 0.4s of audio (avoids blank clips)
                 let min_samples = sample_rate as usize * 2 / 5; // 0.4 seconds
                 if buffer.len() >= min_samples {
-                    // Resample + downmix to 16000 Hz mono (Whisper's required format)
-                    let mono16k = prepare_for_whisper(&buffer, sample_rate, channels);
-                    // Then boost the already-correct-rate signal
-                    let boosted = amplify(&mono16k, MIC_GAIN);
-                    // Always send as 16000 Hz mono after resampling
-                    match stt.transcribe(&boosted, 16000, 1).await {
+                    // Boost the signal then send native rate/channels —
+                    // Parakeet server (onnx-asr) resamples internally.
+                    let boosted = amplify(&buffer, MIC_GAIN);
+                    match stt.transcribe(&boosted, sample_rate, channels).await {
                         Ok(text) => {
                             let cleaned = clean_transcript(&text);
                             if !cleaned.is_empty() {

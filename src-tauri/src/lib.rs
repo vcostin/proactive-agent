@@ -252,7 +252,7 @@ pub fn sidecar_filename(name: &str) -> String {
 pub fn find_sidecar(name: &str) -> Option<PathBuf> {
     let filename = sidecar_filename(name);
     let root = binaries_dir();
-    // The short name is the first segment: "llama-server" → "llama", "whisper-server" → "whisper"
+    // The short name is the first segment: "llama-server" → "llama", "parakeet-server" → "parakeet"
     let short = name.split('-').next().unwrap_or(name);
     [
         root.join(name).join(&filename),    // binaries/llama-server/llama-server-...exe

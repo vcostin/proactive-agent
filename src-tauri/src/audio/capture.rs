@@ -39,7 +39,7 @@ impl AudioCapture {
         let sample_rate = supported.sample_rate().0;
         let channels = supported.channels();
         // Use device native config — not all devices support forced mono
-        // prepare_for_whisper() handles the stereo→mono downmix before transcription
+        // prepare_for_stt() handles the stereo→mono downmix before transcription
         let config: cpal::StreamConfig = supported.into();
 
         let vad_active = Arc::new(AtomicBool::new(false));
