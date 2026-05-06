@@ -19,3 +19,4 @@ src-tauri/.cargo/config.toml
 
 # Claude local settings
 .claude/
+parakeet-tdt-0.6b-v3-fastapi-openai/
