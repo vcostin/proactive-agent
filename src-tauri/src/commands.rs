@@ -433,8 +433,8 @@ fn copy_vcredist_dlls_to_binaries() {
 }
 
 /// Diagnose what is actually running on the chat server port.
-/// Returns PID of our stored child, what process owns port 8080,
-/// and raw responses from /health and /props to confirm server identity.
+/// Dev-only — stripped from release builds.
+#[cfg(debug_assertions)]
 #[tauri::command]
 pub async fn diagnose_chat_server(
     config: State<'_, SharedConfig>,
@@ -541,6 +541,8 @@ pub async fn diagnose_chat_server(
 /// Open a new console window that runs llama-server --version directly.
 /// Windows shows a GUI popup naming the exact DLL and function that is
 /// missing before the process even starts — this is the definitive diagnostic.
+/// Dev-only — stripped from release builds.
+#[cfg(debug_assertions)]
 #[tauri::command]
 pub async fn open_llama_diagnostic() -> CmdResult<()> {
     let binary = crate::find_sidecar("llama-server")
