@@ -126,10 +126,18 @@ pub async fn run_stt_loop(
                 // Silence gap — require at least 0.4s of audio (avoids blank clips)
                 let min_samples = sample_rate as usize * 2 / 5; // 0.4 seconds
                 if buffer.len() >= min_samples {
-                    // Boost the signal then send native rate/channels —
-                    // Parakeet server (onnx-asr) resamples internally.
-                    let boosted = amplify(&buffer, MIC_GAIN);
-                    match stt.transcribe(&boosted, sample_rate, channels).await {
+                    // Downmix stereo → mono (ASR models are trained on mono).
+                    // Keep native sample rate — Parakeet resamples internally.
+                    let mono = if channels > 1 {
+                        let ch = channels as usize;
+                        buffer.chunks(ch)
+                            .map(|frame| frame.iter().sum::<f32>() / ch as f32)
+                            .collect::<Vec<_>>()
+                    } else {
+                        buffer.clone()
+                    };
+                    let boosted = amplify(&mono, MIC_GAIN);
+                    match stt.transcribe(&boosted, sample_rate, 1).await {
                         Ok(text) => {
                             let cleaned = clean_transcript(&text);
                             if !cleaned.is_empty() {
