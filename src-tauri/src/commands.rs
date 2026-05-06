@@ -203,8 +203,8 @@ pub async fn start_voice_input(
         .recv_timeout(std::time::Duration::from_secs(3))
         .unwrap_or((16000, 1));
 
-    let whisper_port = config.read().await.whisper_port;
-    tauri::async_runtime::spawn(crate::audio::run_stt_loop(rx, whisper_port, sample_rate, channels, app_handle));
+    let model_path = config.read().await.whisper_model_path();
+    tauri::async_runtime::spawn(crate::audio::run_stt_loop(rx, model_path, sample_rate, channels, app_handle));
 
     Ok(())
 }

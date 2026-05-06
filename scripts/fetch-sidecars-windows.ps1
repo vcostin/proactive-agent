@@ -103,14 +103,19 @@ if (-not $whisperAsset) {
 } else {
     $tmpWZip = "$env:TEMP\whisper.zip"
     Download-File $whisperAsset.browser_download_url $tmpWZip
-    $whisperExe = Expand-And-Find $tmpWZip "$env:TEMP\whisper-extract" "whisper-server.exe"
     $WhisperBinDir = Join-Path $BinDir "whisper"
     New-Item -ItemType Directory -Force -Path $WhisperBinDir | Out-Null
-    Copy-Item $whisperExe.FullName "$WhisperBinDir\whisper-server-x86_64-pc-windows-msvc.exe" -Force
+
+    # Copy whisper-server AND whisper-cli (CLI mode is more reliable than server)
+    $whisperServer = Get-ChildItem "$env:TEMP\whisper-extract" -Recurse -Filter "whisper-server.exe" | Select-Object -First 1
+    $whisperCli    = Get-ChildItem "$env:TEMP\whisper-extract" -Recurse -Filter "whisper-cli.exe"    | Select-Object -First 1
+    if ($whisperServer) { Copy-Item $whisperServer.FullName "$WhisperBinDir\whisper-server-x86_64-pc-windows-msvc.exe" -Force }
+    if ($whisperCli)    { Copy-Item $whisperCli.FullName    "$WhisperBinDir\whisper-cli-x86_64-pc-windows-msvc.exe"    -Force }
+
     $wDllCount = 0
     Get-ChildItem "$env:TEMP\whisper-extract" -Recurse -Filter "*.dll" |
         ForEach-Object { Copy-Item $_.FullName $WhisperBinDir -Force; $wDllCount++ }
-    Write-Host "  OK whisper/ subdirectory: whisper-server.exe + $wDllCount DLLs"
+    Write-Host "  OK whisper/ subdirectory: server+cli + $wDllCount DLLs"
 }
 
 # ─── 3. Models ────────────────────────────────────────────────────────────────

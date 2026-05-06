@@ -106,12 +106,12 @@ pub fn start_capture() -> Result<(VoiceHandle, mpsc::Receiver<Vec<f32>>)> {
 /// Exits when the audio channel closes (i.e. VoiceHandle is dropped).
 pub async fn run_stt_loop(
     mut audio_rx: mpsc::Receiver<Vec<f32>>,
-    whisper_port: u16,
+    model_path: std::path::PathBuf,
     sample_rate: u32,
     channels: u16,
     app_handle: tauri::AppHandle,
 ) {
-    let stt = SttClient::new(whisper_port);
+    let stt = SttClient::new(model_path);
     let mut buffer: Vec<f32> = Vec::new();
 
     loop {
