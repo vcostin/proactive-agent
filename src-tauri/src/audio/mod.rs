@@ -24,6 +24,39 @@ fn amplify(samples: &[f32], gain: f32) -> Vec<f32> {
     samples.iter().map(|&s| (s * gain).clamp(-1.0, 1.0)).collect()
 }
 
+/// Downmix stereo→mono and resample to 16000 Hz.
+/// Whisper only processes 16000 Hz mono — sending 48000 Hz stereo
+/// makes it hear everything at 3× wrong speed and in double.
+fn prepare_for_whisper(samples: &[f32], sample_rate: u32, channels: u16) -> Vec<f32> {
+    // Step 1: downmix to mono
+    let mono: Vec<f32> = if channels <= 1 {
+        samples.to_vec()
+    } else {
+        let ch = channels as usize;
+        samples.chunks(ch)
+            .map(|frame| frame.iter().sum::<f32>() / ch as f32)
+            .collect()
+    };
+
+    // Step 2: resample to 16000 Hz via linear interpolation
+    const WHISPER_RATE: u32 = 16000;
+    if sample_rate == WHISPER_RATE {
+        return mono;
+    }
+    let ratio = sample_rate as f64 / WHISPER_RATE as f64;
+    let out_len = (mono.len() as f64 / ratio) as usize;
+    let mut out = Vec::with_capacity(out_len);
+    for i in 0..out_len {
+        let pos = i as f64 * ratio;
+        let idx = pos as usize;
+        let frac = (pos - idx as f64) as f32;
+        let s0 = mono.get(idx).copied().unwrap_or(0.0);
+        let s1 = mono.get(idx + 1).copied().unwrap_or(0.0);
+        out.push(s0 + (s1 - s0) * frac);
+    }
+    out
+}
+
 fn clean_transcript(text: &str) -> String {
     let t = text.trim();
     if t.is_empty() { return String::new(); }
@@ -92,9 +125,12 @@ pub async fn run_stt_loop(
                 // Silence gap — require at least 0.4s of audio (avoids blank clips)
                 let min_samples = sample_rate as usize * 2 / 5; // 0.4 seconds
                 if buffer.len() >= min_samples {
-                    // Boost mic input before transcription (compensates for low mic level)
-                    let boosted = amplify(&buffer, MIC_GAIN);
-                    match stt.transcribe(&boosted, sample_rate, channels).await {
+                    // Resample + downmix to 16000 Hz mono (Whisper's required format)
+                    let mono16k = prepare_for_whisper(&buffer, sample_rate, channels);
+                    // Then boost the already-correct-rate signal
+                    let boosted = amplify(&mono16k, MIC_GAIN);
+                    // Always send as 16000 Hz mono after resampling
+                    match stt.transcribe(&boosted, 16000, 1).await {
                         Ok(text) => {
                             let cleaned = clean_transcript(&text);
                             if !cleaned.is_empty() {
