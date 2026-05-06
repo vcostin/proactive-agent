@@ -56,7 +56,7 @@ impl AppConfig {
             db_path,
             llama_port: 18080,
             embed_port: 18081,
-            stt_port: 18082,
+            stt_port: 5092,  // parakeet-server default port
             kokoro_port: 18083,
             audio_device: None,
             embed_model: "nomic-embed-text".to_string(),

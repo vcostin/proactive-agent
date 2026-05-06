@@ -383,10 +383,9 @@ fn spawn_sidecars(config: SharedConfig, event_log: SharedEventLog, chat_child: S
                  "--alias".into(), "nomic-embed-text".into()],
             event_log.clone(), pids.clone());
 
-        // Parakeet TDT STT server — loads its own model from models/ sub-directory
+        // Parakeet TDT STT server — listens on port 5092, loads model from HF cache
         spawn_direct("parakeet-server", "Parakeet STT",
-            vec!["--host".into(), "127.0.0.1".into(),
-                 "--port".into(), stt_port.to_string()],
+            vec![],   // server uses hardcoded host/port from app.py
             event_log.clone(), pids.clone());
 
         // TTS via sherpa-onnx (piper voice model)
