@@ -6,9 +6,9 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 
 /// RMS level above which audio is considered speech.
-/// Keep low — false positives are filtered by clean_transcript().
-/// Better to capture too much than miss speech entirely.
-const VAD_THRESHOLD: f32 = 0.008;
+/// Low threshold = capture more, rely on STT to ignore noise.
+/// Missing word beginnings is worse than sending a bit of silence.
+const VAD_THRESHOLD: f32 = 0.005;
 
 pub struct AudioCapture {
     /// Kept alive — stream stops when this is dropped.

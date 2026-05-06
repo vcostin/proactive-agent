@@ -12,15 +12,18 @@ use tauri::Emitter;
 use tokio::sync::mpsc;
 
 const AUDIO_CHANNEL_BUF: usize = 256;
-const SILENCE_MS: u64 = 800;
-/// Gain multiplier applied before sending audio to Whisper.
-/// 1.0 = no boost. Too high causes clipping which garbles transcription.
-const MIC_GAIN: f32 = 1.5;
+const SILENCE_MS: u64 = 1000; // 1s silence before sending — captures complete sentences
+const MIC_GAIN: f32 = 1.5;   // kept for API compat, replaced by normalization in amplify()
 
 /// Filter out common STT hallucinations for non-speech audio.
 /// Returns empty string if the transcript should be discarded.
-/// Amplify PCM samples by `gain`, clamped to [-1.0, 1.0] to avoid clipping.
-fn amplify(samples: &[f32], gain: f32) -> Vec<f32> {
+/// Normalize audio to a target peak level regardless of mic volume.
+/// Better than fixed gain — adapts to the actual signal level automatically.
+fn amplify(samples: &[f32], _gain: f32) -> Vec<f32> {
+    const TARGET_PEAK: f32 = 0.7; // -3 dBFS — good level for ASR models
+    let peak = samples.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
+    if peak < 0.001 { return samples.to_vec(); } // silence — nothing to boost
+    let gain = (TARGET_PEAK / peak).min(20.0); // cap at 26dB to avoid noise amplification
     samples.iter().map(|&s| (s * gain).clamp(-1.0, 1.0)).collect()
 }
 
