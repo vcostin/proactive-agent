@@ -361,7 +361,7 @@ fn spawn_sidecars(config: SharedConfig, event_log: SharedEventLog, chat_child: S
         let embed_path     = cfg.embed_model_path().to_string_lossy().into_owned();
         let cfg_models_dir = cfg.models_dir.clone();
         let embed_port     = cfg.embed_port;
-        let stt_port       = cfg.stt_port;
+        let _stt_port      = cfg.stt_port; // port is hardcoded in parakeet-server binary
         let kokoro_port    = cfg.kokoro_port;
         let llama_port     = cfg.llama_port;
         drop(cfg);
