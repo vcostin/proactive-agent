@@ -7,16 +7,16 @@ pub struct AppConfig {
     /// Empty = no model selected yet (triggers the setup wizard).
     pub chat_model: String,
 
-    /// Directory where auto-downloaded models are stored
-    /// (nomic-embed-text, whisper). Defaults to <app_data>/models.
+    /// Directory where auto-downloaded models are stored.
     pub models_dir: PathBuf,
 
-    /// Directory where LanceDB memory is stored. Defaults to <app_data>/memory.
+    /// Directory where LanceDB memory is stored.
     pub db_path: PathBuf,
 
     pub llama_port: u16,
     pub embed_port: u16,
-    pub whisper_port: u16,
+    /// Port for the Parakeet TDT STT sidecar (was whisper_port).
+    pub stt_port: u16,
     pub kokoro_port: u16,
 
     /// None means cpal picks the system default.
@@ -26,8 +26,6 @@ pub struct AppConfig {
     pub embed_model: String,
     /// Filename of the nomic-embed-text GGUF inside models_dir.
     pub embed_model_file: String,
-    /// Filename of the Whisper model inside models_dir.
-    pub whisper_model_file: String,
 
     pub persona_prompt: String,
     pub context_window_tokens: usize,
@@ -39,17 +37,10 @@ pub struct AppConfig {
 }
 
 impl AppConfig {
-    /// Initialise with proper OS-level data directories.
-    /// `data_dir` comes from `app_handle.path().app_data_dir()`.
-    ///
-    /// In debug builds we use paths relative to the working directory
-    /// so that `npm run setup` models are found immediately without
-    /// running the in-app download wizard.
     pub fn with_data_dir(data_dir: PathBuf) -> Self {
         #[cfg(debug_assertions)]
         let (models_dir, db_path) = {
             let cwd = std::env::current_dir().unwrap_or_else(|_| data_dir.clone());
-            // In `npm run tauri dev` the binary CWD is src-tauri/ — step up to project root.
             let root = match cwd.file_name().and_then(|n| n.to_str()) {
                 Some("src-tauri") => cwd.parent().unwrap_or(&cwd).to_path_buf(),
                 _ => cwd,
@@ -63,14 +54,13 @@ impl AppConfig {
             chat_model: String::new(),
             models_dir,
             db_path,
-            llama_port: 18080,   // 8080 is frequently occupied (LM Studio, dev servers, etc.)
+            llama_port: 18080,
             embed_port: 18081,
-            whisper_port: 18082,
+            stt_port: 18082,
             kokoro_port: 18083,
             audio_device: None,
             embed_model: "nomic-embed-text".to_string(),
             embed_model_file: "nomic-embed-text-v1.5.Q8_0.gguf".to_string(),
-            whisper_model_file: "ggml-medium.en.bin".to_string(),
             persona_prompt: concat!(
                 "You are a helpful, proactive assistant with persistent memory. ",
                 "You remember facts about the user across conversations. ",
@@ -91,8 +81,6 @@ impl AppConfig {
         }
     }
 
-    /// Load persisted config from `config_path`, falling back to defaults
-    /// seeded with `data_dir` if the file is missing or unreadable.
     pub fn load(config_path: &std::path::Path, data_dir: PathBuf) -> Self {
         if let Ok(text) = std::fs::read_to_string(config_path) {
             if let Ok(cfg) = serde_json::from_str::<AppConfig>(&text) {
@@ -102,7 +90,6 @@ impl AppConfig {
         Self::with_data_dir(data_dir)
     }
 
-    /// Persist to disk so settings survive restarts.
     pub fn save(&self, config_path: &std::path::Path) -> anyhow::Result<()> {
         if let Some(parent) = config_path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -111,7 +98,6 @@ impl AppConfig {
         Ok(())
     }
 
-    /// True when the app has enough to be usable (chat model + required models present).
     pub fn is_ready(&self) -> bool {
         !self.chat_model.is_empty()
             && std::path::Path::new(&self.chat_model).exists()
@@ -121,7 +107,12 @@ impl AppConfig {
         self.models_dir.join(&self.embed_model_file)
     }
 
-    pub fn whisper_model_path(&self) -> PathBuf {
-        self.models_dir.join(&self.whisper_model_file)
+    /// Path where Parakeet model files are expected.
+    pub fn stt_model_dir() -> PathBuf {
+        crate::binaries_dir().join("parakeet").join("models")
+    }
+
+    pub fn stt_model_ready() -> bool {
+        Self::stt_model_dir().join("parakeet-tdt-0.6b-v3.onnx").exists()
     }
 }

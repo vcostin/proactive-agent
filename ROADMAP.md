@@ -10,7 +10,15 @@ Model parameters exposed in UI. Semantic distillation running in background.
 ### ~~1. Voice input wiring~~ ✅ DONE
 AudioCapture → STT loop → `voice_transcript` event → `sendMessage`. Mic toggle in ChatWindow.
 
-### 2. Whisper-server stays alive ⚠️ IN PROGRESS
+### ~~2. Whisper-server stays alive~~ ❌ RETIRED — replaced by Parakeet TDT
+
+### 2b. Parakeet STT sidecar ⬜ TODO
+- [ ] Build frozen parakeet-server binary from groxaxo/parakeet-tdt-0.6b-v3-fastapi-openai
+- [ ] Place in `binaries/parakeet/` with `models/` subdirectory
+- [ ] SetupWizard downloads model files (~600 MB) — no terminal step
+- [ ] Verify HF download URLs in download_required_models command
+- [ ] Test Romanian + Russian speech → accurate transcript
+- [ ] Green dot for "parakeet" in SidecarHealth debug panel
 Whisper loads model successfully but exits after init. Added `-H 127.0.0.1 -t 4` flags.
 - Check `[ADAPTER]` log after restart to see exit code
 - If still failing: try `--host` vs `-H`, or download a different whisper.cpp build

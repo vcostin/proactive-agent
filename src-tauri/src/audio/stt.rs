@@ -1,80 +1,58 @@
-#![allow(dead_code)]
 use anyhow::Result;
-use std::path::PathBuf;
+use reqwest::Client;
+use serde::Deserialize;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
-/// Speech-to-text via whisper.cpp CLI subprocess.
-/// No HTTP server needed — call the binary directly with a temp WAV file.
+/// Speech-to-text via Parakeet TDT sidecar HTTP server.
+/// Endpoint: POST /v1/audio/transcriptions (OpenAI-compatible multipart).
 pub struct SttClient {
-    model_path: PathBuf,
+    client: Client,
+    port: u16,
     last_latency_ms: Arc<AtomicU64>,
 }
 
+#[derive(Deserialize)]
+struct TranscriptResponse {
+    text: String,
+}
+
 impl SttClient {
-    pub fn new(model_path: PathBuf) -> Self {
+    pub fn new(port: u16) -> Self {
         Self {
-            model_path,
+            client: Client::new(),
+            port,
             last_latency_ms: Arc::new(AtomicU64::new(0)),
         }
     }
 
-    /// Transcribe PCM audio using whisper CLI subprocess.
     pub async fn transcribe(
         &self,
         pcm: &[f32],
         sample_rate: u32,
         channels: u16,
     ) -> Result<String> {
+        let wav = pcm_to_wav(pcm, sample_rate, channels);
         let start = Instant::now();
 
-        // Find whisper binary (whisper-cli or whisper-server in binaries/whisper/)
-        let binary = crate::find_sidecar("whisper-cli")
-            .or_else(|| crate::find_sidecar("whisper-server"))
-            .ok_or_else(|| anyhow::anyhow!("whisper binary not found — run: npm run setup"))?;
+        let part = reqwest::multipart::Part::bytes(wav)
+            .file_name("audio.wav")
+            .mime_str("audio/wav")?;
+        let form = reqwest::multipart::Form::new().part("file", part);
 
-        let bin_dir = binary.parent()
-            .map(|p| p.to_path_buf())
-            .unwrap_or_else(crate::binaries_dir);
+        let resp: TranscriptResponse = self
+            .client
+            .post(format!("http://127.0.0.1:{}/v1/audio/transcriptions", self.port))
+            .multipart(form)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
 
-        if !self.model_path.exists() {
-            return Err(anyhow::anyhow!(
-                "whisper model not found at {} — run: npm run setup",
-                self.model_path.display()
-            ));
-        }
-
-        // Write temp WAV file
-        let tmp = std::env::temp_dir().join("proactive_stt.wav");
-        let wav = pcm_to_wav(pcm, sample_rate, channels);
-        tokio::fs::write(&tmp, &wav).await?;
-
-        // Call whisper CLI
-        let output = tokio::process::Command::new(&binary)
-            .args([
-                "-m", self.model_path.to_str().unwrap_or(""),
-                "-f", tmp.to_str().unwrap_or(""),
-                "-l", "en",
-                "--no-prints",       // suppress progress bars
-                "--no-timestamps",   // plain text output only
-            ])
-            .current_dir(&bin_dir)
-            .output()
-            .await;
-
-        let _ = tokio::fs::remove_file(&tmp).await;
-
-        let output = output?;
         self.last_latency_ms.store(start.elapsed().as_millis() as u64, Ordering::Relaxed);
-
-        if output.status.success() {
-            let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            Ok(text)
-        } else {
-            let err = String::from_utf8_lossy(&output.stderr);
-            Err(anyhow::anyhow!("whisper error: {err}"))
-        }
+        Ok(resp.text.trim().to_string())
     }
 
     pub fn last_latency_ms(&self) -> u64 {

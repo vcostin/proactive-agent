@@ -13,7 +13,7 @@ interface Props {
 type Step = 'models' | 'chat';
 
 export function SetupWizard({ status, onComplete }: Props) {
-  const [step, setStep] = useState<Step>(!status.embed_model_ready || !status.whisper_model_ready ? 'models' : 'chat');
+  const [step, setStep] = useState<Step>(!status.embed_model_ready || !status.stt_model_ready ? 'models' : 'chat');
   const [deps, setDeps] = useState<SystemDeps | null>(null);
   const [downloading, setDownloading] = useState(false);
   const [progress, setProgress] = useState<Record<string, DownloadProgress>>({});
@@ -87,7 +87,7 @@ export function SetupWizard({ status, onComplete }: Props) {
           borderBottom: '1px solid var(--border)', gap: 8,
         }}>
           <StepPill n={1} label="required models" active={step === 'models'}
-            done={status.embed_model_ready && status.whisper_model_ready} />
+            done={status.embed_model_ready && status.stt_model_ready} />
           <div style={{ flex: 1, borderTop: '1px solid var(--border)', marginTop: 12, alignSelf: 'flex-start' }} />
           <StepPill n={2} label="chat model" active={step === 'chat'}
             done={!!status.chat_model} />
@@ -148,11 +148,11 @@ function ModelsStep({ status, deps, onDepsChange, progress, downloading, error, 
       ready: status.embed_model_ready,
     },
     {
-      filename: 'ggml-base.en.bin',
-      label: 'Whisper base (English)',
-      desc: 'Speech-to-text',
-      size: '142 MB',
-      ready: status.whisper_model_ready,
+      filename: 'parakeet-tdt-0.6b-v3.onnx',
+      label: 'Parakeet TDT 0.6B',
+      desc: 'Speech-to-text — 25 languages incl. Romanian & Russian',
+      size: '~600 MB',
+      ready: status.stt_model_ready,
     },
   ];
 
@@ -228,7 +228,7 @@ function ModelsStep({ status, deps, onDepsChange, progress, downloading, error, 
               </button>
               <button className="primary" onClick={onDownload} disabled={downloading}
                 style={{ padding: '6px 20px' }}>
-                {downloading ? 'downloading…' : 'download (~416 MB)'}
+                {downloading ? 'downloading…' : 'download (~874 MB)'}
               </button>
             </>
         }

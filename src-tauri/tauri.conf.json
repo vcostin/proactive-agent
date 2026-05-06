@@ -29,7 +29,7 @@
     "icon": [],
     "externalBin": [
       "../binaries/llama/llama-server",
-      "../binaries/whisper/whisper-server",
+      "../binaries/parakeet/parakeet-server",
       "../binaries/kokoro-server"
     ]
   }

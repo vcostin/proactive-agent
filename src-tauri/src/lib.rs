@@ -359,10 +359,9 @@ fn spawn_sidecars(config: SharedConfig, event_log: SharedEventLog, chat_child: S
         let cfg = config.read().await;
         let chat_model     = cfg.chat_model.clone();
         let embed_path     = cfg.embed_model_path().to_string_lossy().into_owned();
-        let whisper_path   = cfg.whisper_model_path().to_string_lossy().into_owned();
         let cfg_models_dir = cfg.models_dir.clone();
         let embed_port     = cfg.embed_port;
-        let whisper_port   = cfg.whisper_port;
+        let stt_port       = cfg.stt_port;
         let kokoro_port    = cfg.kokoro_port;
         let llama_port     = cfg.llama_port;
         drop(cfg);
@@ -384,10 +383,10 @@ fn spawn_sidecars(config: SharedConfig, event_log: SharedEventLog, chat_child: S
                  "--alias".into(), "nomic-embed-text".into()],
             event_log.clone(), pids.clone());
 
-        spawn_direct("whisper-server", "whisper",
-            vec!["--model".into(), whisper_path,
-                 "--port".into(), whisper_port.to_string(),
-                 "--host".into(), "127.0.0.1".into()],
+        // Parakeet TDT STT server — loads its own model from models/ sub-directory
+        spawn_direct("parakeet-server", "Parakeet STT",
+            vec!["--host".into(), "127.0.0.1".into(),
+                 "--port".into(), stt_port.to_string()],
             event_log.clone(), pids.clone());
 
         // TTS via sherpa-onnx (piper voice model)

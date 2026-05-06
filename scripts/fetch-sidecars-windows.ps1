@@ -80,56 +80,39 @@ $llamaExe = Expand-And-Find "$env:TEMP\llama-cpu.zip" "$env:TEMP\llama-cpu-extra
 Copy-Item $llamaExe.FullName "$LlamaBinDir\llama-server-x86_64-pc-windows-msvc.exe" -Force
 Write-Host "  OK llama-server.exe (CPU build, full API) + $dllCount Vulkan DLLs"
 
-# ─── 2. whisper-server ────────────────────────────────────────────────────────
-Write-Host "`n[2/4] whisper.cpp (Windows x64)"
-$whisperRelease = Get-LatestRelease "ggerganov/whisper.cpp"
-Write-Host "      Release: $($whisperRelease.tag_name)"
+# ─── 2. Parakeet TDT STT — binary must be built separately ───────────────────
+# whisper.cpp is retired. STT is now Parakeet TDT 0.6B v3 (ONNX, CPU).
+# The parakeet-server binary is built once from:
+#   https://github.com/groxaxo/parakeet-tdt-0.6b-v3-fastapi-openai
+# using: pyinstaller --onefile main.py --name parakeet-server-x86_64-pc-windows-msvc
+# The SetupWizard downloads the ONNX model files at first run.
+Write-Host "`n[2/4] Parakeet TDT STT"
+$ParakeetBinDir = Join-Path $BinDir "parakeet"
+$ParakeetModelDir = Join-Path $ParakeetBinDir "models"
+New-Item -ItemType Directory -Force -Path $ParakeetBinDir | Out-Null
+New-Item -ItemType Directory -Force -Path $ParakeetModelDir | Out-Null
 
-# whisper.cpp naming has varied across releases:
-#   older: whisper-bin-win-x64.zip
-#   newer: whisper-bin-x64.zip  (no "win" prefix)
-#   CUDA:  whisper-cublas-*-bin-x64.zip (skip — we want CPU/default build)
-$whisperAsset = $whisperRelease.assets |
-    Where-Object {
-        $_.name -match "x64.*\.zip$" -and
-        $_.name -notmatch "coreml|xcfr|cublas|metal|ios|android|arm"
-    } |
-    Sort-Object { ($_.name -match "vulkan") } -Descending |   # prefer Vulkan if present
-    Select-Object -First 1
-
-if (-not $whisperAsset) {
-    Write-Warning "Cannot find a Windows whisper.cpp asset — skipping."
-    Write-Warning "Grab it manually from https://github.com/ggerganov/whisper.cpp/releases"
+$parakeetExe = Join-Path $ParakeetBinDir "parakeet-server-x86_64-pc-windows-msvc.exe"
+if (Test-Path $parakeetExe) {
+    Write-Host "  OK parakeet-server.exe (already present)"
 } else {
-    $tmpWZip = "$env:TEMP\whisper.zip"
-    Download-File $whisperAsset.browser_download_url $tmpWZip
-    $WhisperBinDir = Join-Path $BinDir "whisper"
-    New-Item -ItemType Directory -Force -Path $WhisperBinDir | Out-Null
-
-    # Copy whisper-server AND whisper-cli (CLI mode is more reliable than server)
-    $whisperServer = Get-ChildItem "$env:TEMP\whisper-extract" -Recurse -Filter "whisper-server.exe" | Select-Object -First 1
-    $whisperCli    = Get-ChildItem "$env:TEMP\whisper-extract" -Recurse -Filter "whisper-cli.exe"    | Select-Object -First 1
-    if ($whisperServer) { Copy-Item $whisperServer.FullName "$WhisperBinDir\whisper-server-x86_64-pc-windows-msvc.exe" -Force }
-    if ($whisperCli)    { Copy-Item $whisperCli.FullName    "$WhisperBinDir\whisper-cli-x86_64-pc-windows-msvc.exe"    -Force }
-
-    $wDllCount = 0
-    Get-ChildItem "$env:TEMP\whisper-extract" -Recurse -Filter "*.dll" |
-        ForEach-Object { Copy-Item $_.FullName $WhisperBinDir -Force; $wDllCount++ }
-    Write-Host "  OK whisper/ subdirectory: server+cli + $wDllCount DLLs"
+    Write-Warning "parakeet-server.exe not found."
+    Write-Warning "Build it from: https://github.com/groxaxo/parakeet-tdt-0.6b-v3-fastapi-openai"
+    Write-Warning "  pyinstaller --onefile main.py --name parakeet-server-x86_64-pc-windows-msvc"
+    Write-Warning "  Copy dist/parakeet-server-x86_64-pc-windows-msvc.exe to $ParakeetBinDir"
 }
+
+# Parakeet model files — downloaded by SetupWizard at first run.
+# Pre-download here for dev convenience.
+$parakeetOnnx   = Join-Path $ParakeetModelDir "parakeet-tdt-0.6b-v3.onnx"
+$parakeetTokens = Join-Path $ParakeetModelDir "parakeet-tdt-0.6b-v3-tokens.txt"
+# TODO: verify URLs before release — source: groxaxo/parakeet-tdt-0.6b-v3-fastapi-openai
+if (-not (Test-Path $parakeetOnnx)) {
+    Write-Host "  Parakeet model not present — will be downloaded by SetupWizard on first run"
+} else { Write-Host "  OK Parakeet model files" }
 
 # ─── 3. Models ────────────────────────────────────────────────────────────────
 Write-Host "`n[3/4] Models"
-
-# Whisper medium English model (~1.5 GB) — significantly better with accents
-$whisperModel = Join-Path $ModelsDir "ggml-medium.en.bin"
-if (-not (Test-Path $whisperModel)) {
-    Write-Host "  Downloading ggml-medium.en.bin (~1.5 GB)..."
-    Download-File `
-        "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.en.bin" `
-        $whisperModel
-    Write-Host "  OK ggml-medium.en.bin"
-} else { Write-Host "  OK ggml-medium.en.bin (already present)" }
 
 # nomic-embed-text embedding model (~274 MB)
 $embedModel = Join-Path $ModelsDir "nomic-embed-text-v1.5.Q8_0.gguf"

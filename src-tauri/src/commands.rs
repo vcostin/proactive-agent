@@ -25,7 +25,8 @@ pub struct SetupStatus {
     pub ready: bool,
     pub chat_model: String,
     pub embed_model_ready: bool,
-    pub whisper_model_ready: bool,
+    /// Parakeet TDT ONNX model files present in binaries/parakeet/models/
+    pub stt_model_ready: bool,
     pub data_dir: String,
 }
 
@@ -45,7 +46,7 @@ pub async fn get_setup_status(config: State<'_, SharedConfig>) -> CmdResult<Setu
         ready: cfg.is_ready(),
         chat_model: cfg.chat_model.clone(),
         embed_model_ready: cfg.embed_model_path().exists(),
-        whisper_model_ready: cfg.whisper_model_path().exists(),
+        stt_model_ready: crate::config::AppConfig::stt_model_ready(),
         data_dir: cfg.models_dir
             .parent()
             .unwrap_or(&cfg.models_dir)
@@ -72,20 +73,28 @@ pub async fn pick_model_file(app_handle: tauri::AppHandle) -> CmdResult<Option<S
     Ok(path.map(|p| p.to_string()))
 }
 
-/// Download the two required fixed models (nomic-embed-text + whisper-base-en)
-/// into the app data models directory. Emits `download_progress` events.
+/// Download required models (nomic-embed-text + Parakeet TDT STT).
+/// Emits `download_progress` events.
 #[tauri::command]
 pub async fn download_required_models(
     config: State<'_, SharedConfig>,
     app_handle: tauri::AppHandle,
 ) -> CmdResult<()> {
-    let (models_dir, embed_path, whisper_path) = {
+    let (models_dir, embed_path) = {
         let cfg = config.read().await;
-        (cfg.models_dir.clone(), cfg.embed_model_path(), cfg.whisper_model_path())
+        (cfg.models_dir.clone(), cfg.embed_model_path())
     };
 
     std::fs::create_dir_all(&models_dir).map_err(to_cmd_err)?;
 
+    // Parakeet model files go into binaries/parakeet/models/
+    let stt_model_dir = crate::config::AppConfig::stt_model_dir();
+    std::fs::create_dir_all(&stt_model_dir).map_err(to_cmd_err)?;
+    let parakeet_onnx   = stt_model_dir.join("parakeet-tdt-0.6b-v3.onnx");
+    let parakeet_tokens = stt_model_dir.join("parakeet-tdt-0.6b-v3-tokens.txt");
+
+    // TODO: verify exact Hugging Face URLs before release
+    // Model source: groxaxo/parakeet-tdt-0.6b-v3-fastapi-openai (ONNX INT8 export)
     let downloads: &[(&str, &str, &std::path::Path)] = &[
         (
             "nomic-embed-text-v1.5.Q8_0.gguf",
@@ -93,9 +102,14 @@ pub async fn download_required_models(
             &embed_path,
         ),
         (
-            "ggml-base.en.bin",
-            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin",
-            &whisper_path,
+            "parakeet-tdt-0.6b-v3.onnx",
+            "https://huggingface.co/groxaxo/parakeet-tdt-0.6b-v3-fastapi-openai/resolve/main/parakeet-tdt-0.6b-v3.onnx",
+            &parakeet_onnx,
+        ),
+        (
+            "parakeet-tdt-0.6b-v3-tokens.txt",
+            "https://huggingface.co/groxaxo/parakeet-tdt-0.6b-v3-fastapi-openai/resolve/main/parakeet-tdt-0.6b-v3-tokens.txt",
+            &parakeet_tokens,
         ),
     ];
 
@@ -205,8 +219,8 @@ pub async fn start_voice_input(
         .recv_timeout(std::time::Duration::from_secs(3))
         .unwrap_or((16000, 1));
 
-    let model_path = config.read().await.whisper_model_path();
-    tauri::async_runtime::spawn(crate::audio::run_stt_loop(rx, model_path, sample_rate, channels, app_handle));
+    let stt_port = config.read().await.stt_port;
+    tauri::async_runtime::spawn(crate::audio::run_stt_loop(rx, stt_port, sample_rate, channels, app_handle));
 
     Ok(())
 }

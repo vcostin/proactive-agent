@@ -2,7 +2,7 @@ import { listen } from '@tauri-apps/api/event';
 import { useEffect, useState } from 'react';
 import { SidecarHealthEvent } from '../../types';
 
-const SIDECARS = ['llama', 'embed', 'whisper', 'kokoro'];
+const SIDECARS = ['llama', 'embed', 'parakeet', 'kokoro'];
 
 export function SidecarHealth() {
   const [health, setHealth] = useState<Record<string, SidecarHealthEvent>>({});

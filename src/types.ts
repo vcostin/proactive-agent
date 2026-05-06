@@ -4,7 +4,8 @@ export interface SetupStatus {
   ready: boolean;
   chat_model: string;
   embed_model_ready: boolean;
-  whisper_model_ready: boolean;
+  /** Parakeet TDT ONNX model files present */
+  stt_model_ready: boolean;
   data_dir: string;
 }
 
