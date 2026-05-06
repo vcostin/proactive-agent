@@ -27,6 +27,7 @@ export function useChat() {
   const [streamingText, setStreamingText] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [ttsEnabled, setTtsEnabled] = useState(false);
   // Keep a ref to messages so the event listener always sees current value
   const messagesRef = useRef(messages);
   useEffect(() => { messagesRef.current = messages; }, [messages]);
@@ -79,6 +80,10 @@ export function useChat() {
       const final = [...messagesRef.current, assistantMsg];
       setMessages(final);
       saveHistory(final);
+      // Speak the response if TTS is enabled
+      if (ttsEnabled && response.trim()) {
+        invoke('speak_text', { text: response }).catch(() => {});
+      }
     } catch (e) {
       setError(String(e));
     } finally {
@@ -104,5 +109,5 @@ export function useChat() {
     localStorage.removeItem(HISTORY_KEY);
   }, []);
 
-  return { messages, streamingText, isLoading, error, sendMessage, addProactive, clearHistory };
+  return { messages, streamingText, isLoading, error, sendMessage, addProactive, clearHistory, ttsEnabled, setTtsEnabled };
 }

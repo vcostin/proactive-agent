@@ -13,7 +13,7 @@ interface Props {
 }
 
 export function ChatWindow({ modelName, onModelClick }: Props) {
-  const { messages, streamingText, isLoading, error, sendMessage, addProactive, clearHistory } = useChat();
+  const { messages, streamingText, isLoading, error, sendMessage, addProactive, clearHistory, ttsEnabled, setTtsEnabled } = useChat();
   const llamaReady = useLlamaReady();
   const [input, setInput] = useState('');
   const [listening, setListening] = useState(false);
@@ -99,6 +99,17 @@ export function ChatWindow({ modelName, onModelClick }: Props) {
           title="Reset chat + wipe all memory"
         >
           🗑 reset memory
+        </button>
+        <button
+          onClick={() => setTtsEnabled(v => !v)}
+          style={{
+            padding: '3px 10px', fontSize: 11,
+            borderColor: ttsEnabled ? 'var(--success)' : 'var(--border)',
+            color: ttsEnabled ? 'var(--success)' : 'var(--text-muted)',
+          }}
+          title={ttsEnabled ? 'Voice output on — click to mute' : 'Voice output off — click to enable'}
+        >
+          {ttsEnabled ? '🔊' : '🔇'}
         </button>
         <WaveformVisualizer isActive={listening} energyLevel={micEnergy} />
         <button
