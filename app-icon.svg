@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- Background -->
+  <rect width="512" height="512" rx="96" fill="#1a1a2e"/>
+  <!-- Outer ring — proactive pulse -->
+  <circle cx="256" cy="256" r="180" fill="none" stroke="#4a9eff" stroke-width="16" opacity="0.3"/>
+  <!-- Inner circle -->
+  <circle cx="256" cy="256" r="140" fill="#0f2444"/>
+  <!-- P for Proactive — bold, centered -->
+  <text x="256" y="330" font-family="system-ui, sans-serif" font-weight="900"
+        font-size="220" text-anchor="middle" fill="#4a9eff">P</text>
+  <!-- Small dot — the "agent" indicator -->
+  <circle cx="370" cy="160" r="28" fill="#55c477"/>
+</svg>
