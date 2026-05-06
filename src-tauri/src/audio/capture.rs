@@ -38,8 +38,14 @@ impl AudioCapture {
 
         let device_name = device.name().unwrap_or_else(|_| "unknown".to_string());
         let sample_rate = supported.sample_rate().0;
-        let channels = supported.channels();
-        let config: cpal::StreamConfig = supported.into();
+        // Force mono — Whisper requires mono audio. Stereo capture then downmix
+        // introduced subtle bugs; capturing mono directly is simpler and correct.
+        let channels: u16 = 1;
+        let config = cpal::StreamConfig {
+            channels,
+            sample_rate: cpal::SampleRate(sample_rate),
+            buffer_size: cpal::BufferSize::Default,
+        };
 
         let vad_active = Arc::new(AtomicBool::new(false));
         let energy_bits = Arc::new(AtomicU32::new(0));
