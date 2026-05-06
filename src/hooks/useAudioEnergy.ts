@@ -13,8 +13,10 @@ export function useAudioEnergy(listening: boolean) {
     const poll = async () => {
       if (!active) return;
       try {
-        const e = await invoke<number>('get_audio_energy');
-        setEnergy(e);
+        const raw = await invoke<number>('get_audio_energy');
+        // Raw RMS is 0.001–0.05 range. Scale to 0–1 for the visualiser.
+        // sqrt gives a more natural-feeling response curve.
+        setEnergy(Math.min(1, Math.sqrt(raw) * 4));
       } catch { /* ignore */ }
       frameRef.current = window.setTimeout(poll, 50);
     };
