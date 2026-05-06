@@ -166,11 +166,19 @@ pub async fn speak_text(
     event_log: State<'_, SharedEventLog>,
 ) -> CmdResult<()> {
     let log = event_log.inner().clone();
+    eprintln!("[TTS] speak_text called, len={}", text.len());
     tauri::async_runtime::spawn(async move {
+        eprintln!("[TTS] starting synthesis...");
         let client = crate::audio::tts::TtsClient::new(0);
         match client.speak(&text).await {
-            Ok(()) => crate::monitor::push_event(&log, "[AUDIO]", "TTS playback complete"),
-            Err(e) => crate::monitor::push_event(&log, "[AUDIO]", format!("TTS error: {e}")),
+            Ok(()) => {
+                eprintln!("[TTS] playback complete");
+                crate::monitor::push_event(&log, "[AUDIO]", "TTS playback complete");
+            }
+            Err(e) => {
+                eprintln!("[TTS] ERROR: {e}");
+                crate::monitor::push_event(&log, "[AUDIO]", format!("TTS error: {e}"));
+            }
         }
     });
     Ok(())
