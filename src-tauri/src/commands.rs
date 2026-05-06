@@ -161,11 +161,16 @@ pub async fn download_required_models(
 /// Speak `text` through the default audio output using the sherpa-onnx TTS binary.
 /// Fire-and-forget — returns immediately, audio plays in the background.
 #[tauri::command]
-pub async fn speak_text(text: String) -> CmdResult<()> {
+pub async fn speak_text(
+    text: String,
+    event_log: State<'_, SharedEventLog>,
+) -> CmdResult<()> {
+    let log = event_log.inner().clone();
     tauri::async_runtime::spawn(async move {
         let client = crate::audio::tts::TtsClient::new(0);
-        if let Err(e) = client.speak(&text).await {
-            eprintln!("[TTS] {e}");
+        match client.speak(&text).await {
+            Ok(()) => crate::monitor::push_event(&log, "[AUDIO]", "TTS playback complete"),
+            Err(e) => crate::monitor::push_event(&log, "[AUDIO]", format!("TTS error: {e}")),
         }
     });
     Ok(())
