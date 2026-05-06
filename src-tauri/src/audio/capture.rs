@@ -6,10 +6,9 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 
 /// RMS level above which audio is considered speech.
-/// 0.01 → too sensitive (ambient noise triggers it)
-/// 0.03 → too aggressive (clips quiet consonants at word start)
-/// 0.015 → better balance for typical laptop/headset mics
-const VAD_THRESHOLD: f32 = 0.015;
+/// Keep low — false positives are filtered by clean_transcript().
+/// Better to capture too much than miss speech entirely.
+const VAD_THRESHOLD: f32 = 0.008;
 
 pub struct AudioCapture {
     /// Kept alive — stream stops when this is dropped.
@@ -38,14 +37,10 @@ impl AudioCapture {
 
         let device_name = device.name().unwrap_or_else(|_| "unknown".to_string());
         let sample_rate = supported.sample_rate().0;
-        // Force mono — Whisper requires mono audio. Stereo capture then downmix
-        // introduced subtle bugs; capturing mono directly is simpler and correct.
-        let channels: u16 = 1;
-        let config = cpal::StreamConfig {
-            channels,
-            sample_rate: cpal::SampleRate(sample_rate),
-            buffer_size: cpal::BufferSize::Default,
-        };
+        let channels = supported.channels();
+        // Use device native config — not all devices support forced mono
+        // prepare_for_whisper() handles the stereo→mono downmix before transcription
+        let config: cpal::StreamConfig = supported.into();
 
         let vad_active = Arc::new(AtomicBool::new(false));
         let energy_bits = Arc::new(AtomicU32::new(0));

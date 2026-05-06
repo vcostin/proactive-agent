@@ -14,8 +14,8 @@ use tokio::sync::mpsc;
 const AUDIO_CHANNEL_BUF: usize = 256;
 const SILENCE_MS: u64 = 800;
 /// Gain multiplier applied before sending audio to Whisper.
-/// 2.0 = +6 dB, 3.0 = +9.5 dB, 4.0 = +12 dB. Tune if mic is still too quiet.
-const MIC_GAIN: f32 = 2.5;
+/// 1.0 = no boost. Too high causes clipping which garbles transcription.
+const MIC_GAIN: f32 = 1.5;
 
 /// Filter out common whisper hallucinations for non-speech audio.
 /// Returns empty string if the transcript should be discarded.
