@@ -93,6 +93,12 @@ impl SemanticStore {
         Ok(self.table.count_rows(None).await? as u64)
     }
 
+    /// Delete all semantic facts — full memory wipe.
+    pub async fn clear_all(&self) -> Result<()> {
+        self.table.delete("true").await?;
+        Ok(())
+    }
+
     /// Extract durable facts from recent episodic entries using the LLM.
     /// Returns the number of new facts stored.
     pub async fn distill_from_episodic(

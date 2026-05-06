@@ -187,6 +187,18 @@ impl Orchestrator {
         self.adapter = Box::new(LlamaCppAdapter::new(port, "llama-chat"));
     }
 
+    /// Full memory reset: clears episodic + semantic tables and the recent turns window.
+    /// Frees the model from past conversation context entirely.
+    pub async fn reset_memory(&mut self) -> anyhow::Result<()> {
+        // Delete all rows from both LanceDB tables
+        self.memory.episodic.clear_all().await?;
+        self.memory.semantic.clear_all().await?;
+        // Reset the in-memory recent turns window
+        self.recent_turns.clear();
+        self.last_context = None;
+        Ok(())
+    }
+
     /// Run one distillation pass: read recent episodic turns, ask the LLM to
     /// extract durable facts, store them in semantic memory.
     /// Called from a background task — never blocks conversation.

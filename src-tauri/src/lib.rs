@@ -149,6 +149,7 @@ pub fn run() {
             commands::set_gen_settings,
             commands::test_defer,
             commands::diagnose_chat_server,
+            commands::reset_chat,
             commands::start_voice_input,
             commands::stop_voice_input,
             commands::get_audio_energy,

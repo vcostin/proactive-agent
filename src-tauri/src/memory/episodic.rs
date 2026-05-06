@@ -107,6 +107,12 @@ impl EpisodicStore {
         Ok(self.table.count_rows(None).await? as u64)
     }
 
+    /// Delete all episodic entries — full memory wipe.
+    pub async fn clear_all(&self) -> Result<()> {
+        self.table.delete("true").await?;
+        Ok(())
+    }
+
     /// Return the N most recently stored entries (for distillation).
     pub async fn retrieve_recent(&self, limit: usize) -> Result<Vec<EpisodicEntry>> {
         use lancedb::query::ExecutableQuery;

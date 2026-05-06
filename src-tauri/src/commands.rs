@@ -605,6 +605,17 @@ pub async fn clear_model(
     Ok(())
 }
 
+/// Full reset: wipes episodic memory, semantic facts, and recent turns window.
+/// The model starts completely fresh with no knowledge of past conversations.
+#[tauri::command]
+pub async fn reset_chat(orchestrator: State<'_, SharedOrchestrator>) -> CmdResult<()> {
+    let mut lock = orchestrator.lock().await;
+    if let Some(ref mut orch) = *lock {
+        orch.reset_memory().await.map_err(to_cmd_err)?;
+    }
+    Ok(())
+}
+
 // ── Chat ──────────────────────────────────────────────────────────────────────
 
 #[tauri::command]

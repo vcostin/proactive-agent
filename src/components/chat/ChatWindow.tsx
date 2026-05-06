@@ -83,11 +83,16 @@ export function ChatWindow({ modelName, onModelClick }: Props) {
           {modelName || 'no model loaded'}
         </button>
         <button
-          onClick={() => { if (confirm('Clear conversation history?')) clearHistory(); }}
+          onClick={async () => {
+            const answer = prompt('Type RESET to confirm — this clears the chat AND all memories. The model will remember nothing.');
+            if (answer?.trim().toUpperCase() !== 'RESET') return;
+            await invoke('reset_chat').catch(() => {});
+            clearHistory();
+          }}
           style={{ fontSize: 10, padding: '2px 8px', color: 'var(--text-muted)' }}
-          title="Clear chat history"
+          title="Reset chat + wipe all memory"
         >
-          clear
+          reset
         </button>
         <div style={{ flex: 1 }} />
         <WaveformVisualizer isActive={listening} energyLevel={micEnergy} />
