@@ -113,4 +113,55 @@ mic @ 48000Hz stereo
 - Requires alongside exe: `onnxruntime.dll`, `espeak-ng.dll`, `piper_phonemize.dll`, `espeak-ng-data/`
 - Voice model: `models/tts/en_US-lessac-medium.onnx` + `.onnx.json`
 - Voices library: https://github.com/rhasspy/piper-voices
+
+---
+
+## 🧹 Cleanup — obsolete code to remove
+
+These are leftovers from replaced/retired features. Low risk, no functionality depends on them.
+
+### Binaries (safe to delete)
+- `binaries/whisper/` — entire directory. Whisper retired, replaced by Parakeet.
+- `binaries/kokoro/` — entire directory. sherpa-onnx replaced by Piper subprocess.
+- `binaries/kokoro-server-x86_64-pc-windows-msvc.exe` — root placeholder, 0 bytes.
+- `binaries/whisper-server-x86_64-pc-windows-msvc.exe` — root placeholder, 0 bytes.
+- `binaries/whisper.dll` — DLL from old whisper layout.
+- Root-level DLLs in `binaries/` (CONCRT140, MSVCP140, SDL2, ggml-*.dll etc.) — these
+  belong in `binaries/llama/` and are already there. Root copies are orphaned.
+
+### Rust — `config.rs`
+- `kokoro_port: u16` field — TTS now uses Piper subprocess, no HTTP server, no port needed.
+- Remove from `AppConfig` struct and `with_data_dir()` default.
+
+### Rust — `lib.rs`
+- `kokoro_port` variable in `spawn_sidecars()` (line ~367).
+- The whole TTS sidecar spawn block that checks `find_sidecar("kokoro-server")` —
+  Piper is a subprocess call from `TtsClient`, not a long-running server.
+  This block logs "TTS (sherpa-onnx) ready" which is misleading.
+
+### Rust — `monitor.rs`
+- `("kokoro", kokoro_port)` entry in the sidecar health check loop —
+  kokoro has no HTTP server to ping. Remove to stop the red dot and timeout noise.
+
+### Rust — `commands.rs`
+- `root.join("whisper")` in `diagnose_chat_server` (line ~426) — dead path.
+
+### Frontend — `SidecarHealth.tsx`
+- `'kokoro'` in the `SIDECARS` array — no server to monitor. Remove the row.
+
+### Scripts
+- `scripts/kokoro_server.py` — Python Kokoro server, replaced by Piper.
+- `scripts/build-kokoro-exe.ps1` — builds the Python Kokoro binary, no longer needed.
+- `app-icon.png`, `UsersRothWorkproactive-aiapp-icon.png` — leftover PNG attempts,
+  `app-icon.svg` is the canonical source now.
+- `scripts/make_icon.py` — one-off script, no longer needed.
+
+### Models
+- `models/ggml-medium.en.bin` — old Whisper medium model, ~1.5 GB. Delete to free space.
+- `models/ggml-small.en.bin` — old Whisper small model, ~466 MB. Delete to free space.
+- `models/ggml-base.en.bin` — old Whisper base model, ~142 MB. Delete to free space.
+
+### tauri.conf.json
+- `"../binaries/kokoro-server"` in `externalBin` — Piper is a subprocess, not a sidecar.
+  Replace with `"../binaries/piper/piper"` (or remove if already updated).
 </content>
