@@ -116,6 +116,64 @@ mic @ 48000Hz stereo
 
 ---
 
+## ♻️ Self-recovery after deleting `binaries/`
+
+**Goal:** deleting `binaries/` and restarting should trigger full re-setup with no terminal commands.
+
+### Current status per component
+
+| Component | Recoverable without terminal? | How |
+|-----------|------------------------------|-----|
+| nomic-embed-text model | ✅ | SetupWizard downloads it |
+| Piper voice model | ✅ | SetupWizard downloads it |
+| Parakeet ONNX model | ✅ | Parakeet server downloads on first run |
+| **llama-server binary** | ❌ | Requires `npm run setup` (dev tool) |
+| **piper binary** | ❌ | Requires `npm run setup` (dev tool) |
+| **parakeet-server binary** | ❌ | Requires manual PyInstaller build |
+
+### What needs to be added to SetupWizard
+
+**llama-server binary** — download CPU build + Vulkan DLLs from GitHub releases:
+```
+GET https://api.github.com/repos/ggerganov/llama.cpp/releases/latest
+→ Download piper_windows_amd64.zip asset
+→ Extract llama-server.exe → binaries/llama/llama-server-x86_64-pc-windows-msvc.exe
+→ Download Vulkan zip → extract all DLLs to binaries/llama/
+```
+
+**piper binary** — download from GitHub releases:
+```
+GET https://api.github.com/repos/rhasspy/piper/releases/latest
+→ Download piper_windows_amd64.zip
+→ Extract piper.exe + DLLs + espeak-ng-data/ → binaries/piper/
+```
+
+**parakeet-server binary** — hardest. Options:
+- a) Host the frozen binary on a private GitHub release and download it
+- b) Ship it inside the Tauri installer bundle (via `externalBin`) — best option for distribution
+- c) Accept that rebuilding it requires Python (developer scenario only)
+
+### For production (installer)
+When built with `npm run tauri build`, Tauri bundles ALL `externalBin` entries into
+the installer package. A user installing via the `.msi` gets all binaries included —
+they never see `binaries/` as a separate folder. Self-recovery doesn't apply.
+
+Self-recovery only matters for the **developer workflow** (working from source).
+For that: `npm run setup` recovers llama + piper. Parakeet binary needs a separate step.
+
+### Roadmap item: add binary downloads to SetupWizard
+Add a `download_required_binaries()` Tauri command that:
+1. Checks if `llama-server` is present and functional (`/health` returns 200)
+2. If not: downloads CPU build + Vulkan DLLs from ggerganov/llama.cpp latest
+3. Checks if `piper` is present
+4. If not: downloads piper_windows_amd64.zip from rhasspy/piper latest
+5. Shows progress bars (same infrastructure as model downloads)
+6. SetupWizard step 0 (before models): "Downloading required tools"
+
+This would make `npm run setup` completely obsolete for both developers and users.
+
+---
+
 ## 🧹 Cleanup — obsolete code to remove
 
 These are leftovers from replaced/retired features. Low risk, no functionality depends on them.
