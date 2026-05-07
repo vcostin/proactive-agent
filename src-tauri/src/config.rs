@@ -17,7 +17,6 @@ pub struct AppConfig {
     pub embed_port: u16,
     /// Port for the Parakeet TDT STT sidecar (was whisper_port).
     pub stt_port: u16,
-    pub kokoro_port: u16,
 
     /// None means cpal picks the system default.
     pub audio_device: Option<String>,
@@ -57,7 +56,6 @@ impl AppConfig {
             llama_port: 18080,
             embed_port: 18081,
             stt_port: 5092,  // parakeet-server default port
-            kokoro_port: 18083,
             audio_device: None,
             embed_model: "nomic-embed-text".to_string(),
             embed_model_file: "nomic-embed-text-v1.5.Q8_0.gguf".to_string(),

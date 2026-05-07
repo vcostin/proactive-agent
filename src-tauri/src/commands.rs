@@ -423,7 +423,6 @@ fn copy_vcredist_dlls_to_binaries() {
     // Copy into every sidecar subdirectory so each exe finds the correct version
     let targets: Vec<std::path::PathBuf> = [
         root.join("llama"),
-        root.join("whisper"),
         root.clone(),   // legacy flat layout fallback
     ]
     .into_iter()
