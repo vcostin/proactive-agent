@@ -125,47 +125,55 @@ if (-not (Test-Path $embedModel)) {
 } else { Write-Host "  OK nomic-embed-text (already present)" }
 
 # ─── 4. TTS server via sherpa-onnx (no Python required) ──────────────────────
-# sherpa-onnx provides pre-built binaries with an OpenAI-compatible TTS HTTP server.
-# We use it as the Kokoro replacement — our TtsClient already hits /v1/audio/speech.
-Write-Host "`n[4/4] TTS server (sherpa-onnx)"
+# ─── 4. Piper TTS — cross-platform neural TTS, offline, no Python ─────────────
+# Piper reads text from stdin, writes WAV. Fast, ~65MB voice, genuinely good quality.
+Write-Host "`n[4/4] Piper TTS"
 
-$KokoroBinDir = Join-Path $BinDir "kokoro"
-New-Item -ItemType Directory -Force -Path $KokoroBinDir | Out-Null
+$PiperBinDir = Join-Path $BinDir "piper"
+New-Item -ItemType Directory -Force -Path $PiperBinDir | Out-Null
 
-$ttsExeDest = Join-Path $KokoroBinDir "kokoro-server-x86_64-pc-windows-msvc.exe"
+$piperExe = Join-Path $PiperBinDir "piper-x86_64-pc-windows-msvc.exe"
 
-if (Test-Path $ttsExeDest) {
-    Write-Host "  OK kokoro-server.exe (already present)"
+if (Test-Path $piperExe) {
+    Write-Host "  OK piper.exe (already present)"
 } else {
-    # sherpa-onnx ships standalone .exe binaries (not a server).
-    # We use the non-streaming TTS CLI directly as a subprocess from Rust.
-    Write-Host "  Downloading sherpa-onnx TTS binary..."
-    $sherpaRelease = Invoke-RestMethod "https://api.github.com/repos/k2-fsa/sherpa-onnx/releases/latest" -Headers $headers
-    Write-Host "      Release: $($sherpaRelease.tag_name)"
+    Write-Host "  Downloading Piper TTS binary..."
+    $piperRelease = Invoke-RestMethod "https://api.github.com/repos/rhasspy/piper/releases/latest" -Headers $headers
+    Write-Host "      Release: $($piperRelease.tag_name)"
 
-    # Asset is named like: sherpa-onnx-non-streaming-tts-x64-v1.13.0.exe
-    $sherpaAsset = $sherpaRelease.assets |
-        Where-Object { $_.name -match "sherpa-onnx-non-streaming-tts-x64.*\.exe$" } |
+    $piperAsset = $piperRelease.assets |
+        Where-Object { $_.name -match "piper_windows_amd64\.zip$" } |
         Select-Object -First 1
 
-    if (-not $sherpaAsset) {
-        Write-Warning "sherpa-onnx TTS binary not found."
-        Write-Warning "Download manually from: https://github.com/k2-fsa/sherpa-onnx/releases"
-        Write-Warning "Rename to: $ttsExeDest"
+    if (-not $piperAsset) {
+        Write-Warning "Piper Windows binary not found. Check: https://github.com/rhasspy/piper/releases"
     } else {
-        Download-File $sherpaAsset.browser_download_url $ttsExeDest
-        Write-Host "  OK sherpa-onnx TTS binary (CLI mode, no server needed)"
+        $tmpPiper = "$env:TEMP\piper.zip"
+        Download-File $piperAsset.browser_download_url $tmpPiper
+        Remove-Item "$env:TEMP\piper-extract" -Recurse -Force -ErrorAction SilentlyContinue
+        Expand-Archive $tmpPiper -DestinationPath "$env:TEMP\piper-extract" -Force
+
+        $piperBin = Get-ChildItem "$env:TEMP\piper-extract" -Recurse -Filter "piper.exe" | Select-Object -First 1
+        if ($piperBin) {
+            Copy-Item $piperBin.FullName $piperExe -Force
+            # Copy DLLs alongside piper.exe
+            Get-ChildItem $piperBin.Directory -Filter "*.dll" |
+                ForEach-Object { Copy-Item $_.FullName $PiperBinDir -Force }
+            Write-Host "  OK piper.exe"
+        } else {
+            Write-Warning "piper.exe not found in zip"
+        }
     }
 }
 
-# Download a piper TTS voice model (en_US-lessac-medium, ~65 MB)
+# Piper voice model (en_US-lessac-medium — natural sounding, ~65 MB)
 $ttsModelDir = Join-Path $ModelsDir "tts"
 New-Item -ItemType Directory -Force -Path $ttsModelDir | Out-Null
 $ttsModel     = Join-Path $ttsModelDir "en_US-lessac-medium.onnx"
 $ttsModelJson = Join-Path $ttsModelDir "en_US-lessac-medium.onnx.json"
 
 if (-not (Test-Path $ttsModel)) {
-    Write-Host "  Downloading piper TTS voice (en_US-lessac-medium, ~65 MB)..."
+    Write-Host "  Downloading piper voice model (en_US-lessac-medium, ~65 MB)..."
     $voiceBase = "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium"
     Download-File "$voiceBase/en_US-lessac-medium.onnx"      $ttsModel
     Download-File "$voiceBase/en_US-lessac-medium.onnx.json" $ttsModelJson

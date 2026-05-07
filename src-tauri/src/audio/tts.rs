@@ -1,80 +1,132 @@
 use anyhow::Result;
+use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
-/// Text-to-speech using the platform's built-in synthesizer.
-/// Windows: System.Speech (SAPI) via PowerShell — always installed, zero config.
-/// macOS:   `say` command — always installed.
+/// TTS via Piper — ONNX neural TTS, cross-platform, offline, genuinely good quality.
+/// Text is piped to stdin; Piper writes a WAV file; we play it via cpal.
 pub struct TtsClient;
 
 impl TtsClient {
     pub fn new(_port: u16) -> Self { Self }
 
-    /// Speak `text` synchronously. Call from spawn_blocking.
     pub async fn speak(&self, text: &str) -> Result<()> {
-        // Clean markdown formatting so it doesn't get read aloud
         let clean = clean_for_speech(text);
         if clean.trim().is_empty() { return Ok(()); }
 
-        #[cfg(target_os = "windows")]
-        {
-            speak_sapi(&clean).await?;
+        let binary = find_piper()?;
+        let model  = find_tts_model()?;
+        let tmp    = std::env::temp_dir().join("proactive_tts.wav");
+
+        // Piper reads text from stdin, writes WAV to --output_file
+        let mut child = tokio::process::Command::new(&binary)
+            .args(["--model", model.to_str().unwrap_or(""),
+                   "--output_file", tmp.to_str().unwrap_or(""),
+                   "--sentence_silence", "0.1"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()?;
+
+        if let Some(mut stdin) = child.stdin.take() {
+            use tokio::io::AsyncWriteExt;
+            stdin.write_all(clean.as_bytes()).await?;
         }
-        #[cfg(target_os = "macos")]
-        {
-            speak_say(&clean).await?;
+
+        let status = child.wait().await?;
+        if !status.success() {
+            return Err(anyhow::anyhow!("piper exited {:?}", status.code()));
         }
-        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-        {
-            eprintln!("[TTS] platform not supported");
-        }
+
+        let wav = tokio::fs::read(&tmp).await?;
+        let _ = tokio::fs::remove_file(&tmp).await;
+        let pcm = wav_to_f32(&wav);
+        tokio::task::spawn_blocking(move || play_pcm_blocking(&pcm))
+            .await
+            .map_err(|e| anyhow::anyhow!("playback: {e}"))??;
 
         Ok(())
     }
 }
 
-/// Remove markdown that would be read aloud as noise.
+fn find_piper() -> Result<std::path::PathBuf> {
+    crate::find_sidecar("piper")
+        .ok_or_else(|| anyhow::anyhow!(
+            "piper binary not found in binaries/piper/ — run: npm run setup"
+        ))
+}
+
+fn find_tts_model() -> Result<std::path::PathBuf> {
+    // In dev: models/tts/ next to project root; in release: relative to exe
+    let candidates = [
+        crate::binaries_dir().parent()
+            .map(|p| p.join("models").join("tts").join("en_US-lessac-medium.onnx"))
+            .unwrap_or_default(),
+        crate::binaries_dir()
+            .parent().and_then(|p| p.parent())
+            .map(|p| p.join("models").join("tts").join("en_US-lessac-medium.onnx"))
+            .unwrap_or_default(),
+    ];
+    candidates.into_iter()
+        .find(|p| p.exists())
+        .ok_or_else(|| anyhow::anyhow!(
+            "piper voice model not found — run: npm run setup"
+        ))
+}
+
+/// Strip markdown so it isn't read aloud as noise.
 fn clean_for_speech(text: &str) -> String {
     let mut s = text.to_string();
-    // Remove code blocks entirely
-    while let (Some(start), Some(end)) = (s.find("```"), s[s.find("```").unwrap_or(0) + 3..].find("```").map(|i| i + s.find("```").unwrap_or(0) + 6)) {
-        s = format!("{}{}", &s[..start], &s[end..]);
+    // Remove fenced code blocks
+    while let Some(start) = s.find("```") {
+        if let Some(rel) = s[start + 3..].find("```") {
+            s = format!("{}{}", &s[..start], &s[start + 3 + rel + 3..]);
+        } else { break; }
     }
-    // Remove inline code
     s = s.replace('`', "");
-    // Remove bold/italic markers
     s = s.replace("**", "").replace("__", "").replace('*', "").replace('_', " ");
-    // Remove URLs
     if let Ok(re) = regex::Regex::new(r"https?://\S+") {
-        s = re.replace_all(&s, "link").to_string();
+        s = re.replace_all(&s, "").to_string();
     }
-    // Collapse whitespace
+    // Remove <defer> tags if the parser somehow missed one
+    if let Ok(re) = regex::Regex::new(r"(?s)<defer>.*?</defer>") {
+        s = re.replace_all(&s, "").to_string();
+    }
     s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-#[cfg(target_os = "windows")]
-async fn speak_sapi(text: &str) -> Result<()> {
-    // Escape single quotes for PowerShell string
-    let escaped = text.replace('\'', "''");
-    let script = format!(
-        "Add-Type -AssemblyName System.Speech; \
-         $s = New-Object System.Speech.Synthesis.SpeechSynthesizer; \
-         $s.Rate = 1; \
-         $s.Speak('{escaped}');",
-    );
-    let status = tokio::process::Command::new("powershell")
-        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
-        .status()
-        .await?;
-    if !status.success() {
-        return Err(anyhow::anyhow!("SAPI exit code: {:?}", status.code()));
-    }
-    Ok(())
+fn wav_to_f32(wav: &[u8]) -> Vec<f32> {
+    if wav.len() < 44 { return vec![]; }
+    wav[44..].chunks_exact(2)
+        .map(|b| i16::from_le_bytes([b[0], b[1]]) as f32 / 32768.0)
+        .collect()
 }
 
-#[cfg(target_os = "macos")]
-async fn speak_say(text: &str) -> Result<()> {
-    tokio::process::Command::new("say")
-        .arg(text)
-        .status()
-        .await?;
+fn play_pcm_blocking(samples: &[f32]) -> Result<()> {
+    if samples.is_empty() { return Ok(()); }
+    let host   = cpal::default_host();
+    let device = host.default_output_device()
+        .ok_or_else(|| anyhow::anyhow!("no output device"))?;
+    let config: cpal::StreamConfig = device.default_output_config()?.into();
+    let samples  = Arc::new(samples.to_vec());
+    let pos      = Arc::new(AtomicUsize::new(0));
+    let (tx, rx) = std::sync::mpsc::sync_channel::<()>(1);
+    let sc = samples.clone();
+    let pc = pos.clone();
+    let stream = device.build_output_stream::<f32, _, _>(
+        &config,
+        move |out: &mut [f32], _| {
+            let p    = pc.load(Ordering::Relaxed);
+            let copy = sc.len().saturating_sub(p).min(out.len());
+            out[..copy].copy_from_slice(&sc[p..p + copy]);
+            for s in &mut out[copy..] { *s = 0.0; }
+            pc.fetch_add(copy, Ordering::Relaxed);
+            if copy == 0 { let _ = tx.try_send(()); }
+        },
+        |e| eprintln!("[TTS] playback error: {e}"),
+        None,
+    )?;
+    stream.play()?;
+    let _ = rx.recv();
     Ok(())
 }
