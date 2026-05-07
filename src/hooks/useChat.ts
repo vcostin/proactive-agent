@@ -28,6 +28,8 @@ export function useChat() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [ttsEnabled, setTtsEnabled] = useState(false);
+  const ttsEnabledRef = useRef(false);
+  useEffect(() => { ttsEnabledRef.current = ttsEnabled; }, [ttsEnabled]);
   // Keep a ref to messages so the event listener always sees current value
   const messagesRef = useRef(messages);
   useEffect(() => { messagesRef.current = messages; }, [messages]);
@@ -80,8 +82,8 @@ export function useChat() {
       const final = [...messagesRef.current, assistantMsg];
       setMessages(final);
       saveHistory(final);
-      // Speak the response if TTS is enabled
-      if (ttsEnabled && response.trim()) {
+      // Use ref so the closure always sees the current toggle state
+      if (ttsEnabledRef.current && response.trim()) {
         invoke('speak_text', { text: response }).catch(() => {});
       }
     } catch (e) {

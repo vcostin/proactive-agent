@@ -14,8 +14,13 @@ impl TtsClient {
         let clean = clean_for_speech(text);
         if clean.trim().is_empty() { return Ok(()); }
 
-        let binary = find_piper()?;
-        let model  = find_tts_model()?;
+        let binary = find_piper().map_err(|e| {
+            eprintln!("[TTS] binary not found: {e}"); e
+        })?;
+        let model = find_tts_model().map_err(|e| {
+            eprintln!("[TTS] model not found: {e}"); e
+        })?;
+        eprintln!("[TTS] binary={} model={}", binary.display(), model.display());
         let tmp    = std::env::temp_dir().join("proactive_tts.wav");
 
         // Piper reads text from stdin, writes WAV to --output_file
@@ -34,11 +39,13 @@ impl TtsClient {
         }
 
         let status = child.wait().await?;
+        eprintln!("[TTS] piper exited: {:?}", status.code());
         if !status.success() {
             return Err(anyhow::anyhow!("piper exited {:?}", status.code()));
         }
 
         let wav = tokio::fs::read(&tmp).await?;
+        eprintln!("[TTS] wav size: {} bytes", wav.len());
         let _ = tokio::fs::remove_file(&tmp).await;
         let pcm = wav_to_f32(&wav);
         tokio::task::spawn_blocking(move || play_pcm_blocking(&pcm))
