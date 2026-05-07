@@ -86,7 +86,7 @@ export function DebugPanel() {
           </Panel>
         </div>
 
-        {/* Dev tools — collapsed by default, not visible in production UX */}
+        {/* Dev tools — collapsed by default */}
         <div style={{ gridColumn: '1 / -1' }}>
           <button
             onClick={() => setShowDevTools(v => !v)}
@@ -99,12 +99,42 @@ export function DebugPanel() {
               <Panel title="Port Diagnostic">
                 <DiagnosticButton />
               </Panel>
+              <Panel title="TTS Test">
+                <TtsTestButton />
+              </Panel>
             </div>
           )}
         </div>
       </div>
 
       {showBrowser && <MemoryBrowser onClose={() => setShowBrowser(false)} />}
+    </div>
+  );
+}
+
+function TtsTestButton() {
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState('');
+  return (
+    <div>
+      <button
+        className="primary"
+        disabled={busy}
+        style={{ fontSize: 11, padding: '3px 12px' }}
+        onClick={async () => {
+          setBusy(true);
+          setResult('calling...');
+          try {
+            await invoke('speak_text', { text: 'Hello, I am your proactive assistant. Voice synthesis is working.' });
+            setResult('✓ invoke ok — check [AUDIO] log');
+          } catch (e) {
+            setResult('✗ invoke failed: ' + String(e));
+          } finally { setBusy(false); }
+        }}
+      >
+        {busy ? '…' : '🔊 test voice'}
+      </button>
+      {result && <div style={{ marginTop: 4, fontSize: 10, color: 'var(--text-muted)' }}>{result}</div>}
     </div>
   );
 }

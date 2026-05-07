@@ -83,8 +83,12 @@ export function useChat() {
       setMessages(final);
       saveHistory(final);
       // Use ref so the closure always sees the current toggle state
+      console.log('[TTS] ttsEnabled:', ttsEnabledRef.current, 'response len:', response.length);
       if (ttsEnabledRef.current && response.trim()) {
-        invoke('speak_text', { text: response }).catch(() => {});
+        console.log('[TTS] invoking speak_text...');
+        invoke('speak_text', { text: response })
+          .then(() => console.log('[TTS] invoke ok'))
+          .catch(e => console.error('[TTS] invoke failed:', e));
       }
     } catch (e) {
       setError(String(e));
