@@ -54,10 +54,10 @@ impl TtsClient {
 
         let wav = tokio::fs::read(&tmp).await?;
         let _ = tokio::fs::remove_file(&tmp).await;
-        let (pcm, wav_rate) = wav_to_f32(&wav);
+        let (pcm, wav_rate, wav_channels) = wav_to_f32(&wav);
         emit_debug_event(app, &dummy_log, "[AUDIO]",
-            format!("TTS: {} KB @ {}Hz — playing", wav.len() / 1024, wav_rate)).await;
-        tokio::task::spawn_blocking(move || play_pcm_blocking(&pcm, wav_rate))
+            format!("TTS: {} KB @ {}Hz {}ch — playing", wav.len() / 1024, wav_rate, wav_channels)).await;
+        tokio::task::spawn_blocking(move || play_pcm_blocking(&pcm, wav_rate, wav_channels))
             .await
             .map_err(|e| anyhow::anyhow!("playback: {e}"))??;
 
@@ -122,15 +122,15 @@ fn clean_for_speech(text: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// Parse WAV header and return (samples, sample_rate).
-fn wav_to_f32(wav: &[u8]) -> (Vec<f32>, u32) {
-    if wav.len() < 44 { return (vec![], 44100); }
-    // Sample rate is at bytes 24-27 in a standard WAV header
+/// Parse WAV header and return (samples, sample_rate, channels).
+fn wav_to_f32(wav: &[u8]) -> (Vec<f32>, u32, u16) {
+    if wav.len() < 44 { return (vec![], 44100, 1); }
+    let channels    = u16::from_le_bytes([wav[22], wav[23]]);
     let sample_rate = u32::from_le_bytes([wav[24], wav[25], wav[26], wav[27]]);
     let samples = wav[44..].chunks_exact(2)
         .map(|b| i16::from_le_bytes([b[0], b[1]]) as f32 / 32768.0)
         .collect();
-    (samples, sample_rate.max(8000))
+    (samples, sample_rate.max(8000), channels.max(1))
 }
 
 /// Resample from `src_rate` to `dst_rate` using linear interpolation.
@@ -148,15 +148,26 @@ fn resample(samples: &[f32], src_rate: u32, dst_rate: u32) -> Vec<f32> {
     }).collect()
 }
 
-fn play_pcm_blocking(samples: &[f32], src_rate: u32) -> Result<()> {
+fn play_pcm_blocking(samples: &[f32], src_rate: u32, src_channels: u16) -> Result<()> {
     if samples.is_empty() { return Ok(()); }
     let host   = cpal::default_host();
     let device = host.default_output_device()
         .ok_or_else(|| anyhow::anyhow!("no output device"))?;
     let config: cpal::StreamConfig = device.default_output_config()?.into();
-    let dst_rate = config.sample_rate.0;
-    // Resample to device rate so playback speed is correct
-    let samples = Arc::new(resample(samples, src_rate, dst_rate));
+    let dst_rate     = config.sample_rate.0;
+    let dst_channels = config.channels as usize;
+
+    // 1. Resample to device sample rate
+    let resampled = resample(samples, src_rate, dst_rate);
+
+    // 2. Upmix channels: mono→stereo duplicates each sample for L and R
+    let samples = Arc::new(if src_channels as usize == dst_channels {
+        resampled
+    } else {
+        resampled.iter()
+            .flat_map(|&s| std::iter::repeat(s).take(dst_channels))
+            .collect()
+    });
     let pos      = Arc::new(AtomicUsize::new(0));
     let (tx, rx) = std::sync::mpsc::sync_channel::<()>(1);
     let sc = samples.clone();
