@@ -10,18 +10,22 @@ pub struct TtsClient;
 impl TtsClient {
     pub fn new(_port: u16) -> Self { Self }
 
-    pub async fn speak(&self, text: &str) -> Result<()> {
+    pub async fn speak(&self, text: &str, log: &crate::monitor::SharedEventLog) -> Result<()> {
         let clean = clean_for_speech(text);
         if clean.trim().is_empty() { return Ok(()); }
 
         let binary = find_piper().map_err(|e| {
-            eprintln!("[TTS] binary not found: {e}"); e
+            crate::monitor::push_event(log, "[AUDIO]", format!("TTS: {e}"));
+            e
         })?;
         let model = find_tts_model().map_err(|e| {
-            eprintln!("[TTS] model not found: {e}"); e
+            crate::monitor::push_event(log, "[AUDIO]", format!("TTS: {e}"));
+            e
         })?;
-        eprintln!("[TTS] binary={} model={}", binary.display(), model.display());
-        let tmp    = std::env::temp_dir().join("proactive_tts.wav");
+        crate::monitor::push_event(log, "[AUDIO]", format!(
+            "TTS speaking {} chars via {}", clean.len(), binary.file_name().unwrap_or_default().to_string_lossy()
+        ));
+        let tmp = std::env::temp_dir().join("proactive_tts.wav");
 
         // Piper reads text from stdin, writes WAV to --output_file
         let mut child = tokio::process::Command::new(&binary)
@@ -39,13 +43,14 @@ impl TtsClient {
         }
 
         let status = child.wait().await?;
-        eprintln!("[TTS] piper exited: {:?}", status.code());
         if !status.success() {
-            return Err(anyhow::anyhow!("piper exited {:?}", status.code()));
+            let msg = format!("piper exited {:?}", status.code());
+            crate::monitor::push_event(log, "[AUDIO]", format!("TTS error: {msg}"));
+            return Err(anyhow::anyhow!("{msg}"));
         }
 
         let wav = tokio::fs::read(&tmp).await?;
-        eprintln!("[TTS] wav size: {} bytes", wav.len());
+        crate::monitor::push_event(log, "[AUDIO]", format!("TTS generated {} KB — playing", wav.len() / 1024));
         let _ = tokio::fs::remove_file(&tmp).await;
         let pcm = wav_to_f32(&wav);
         tokio::task::spawn_blocking(move || play_pcm_blocking(&pcm))
@@ -57,10 +62,21 @@ impl TtsClient {
 }
 
 fn find_piper() -> Result<std::path::PathBuf> {
-    crate::find_sidecar("piper")
-        .ok_or_else(|| anyhow::anyhow!(
-            "piper binary not found in binaries/piper/ — run: npm run setup"
-        ))
+    // 1. Standard sidecar naming (piper-x86_64-pc-windows-msvc.exe)
+    if let Some(p) = crate::find_sidecar("piper") { return Ok(p); }
+
+    // 2. Plain piper.exe — in case setup downloaded without the platform rename
+    let bin_dir = crate::binaries_dir().join("piper");
+    for name in &["piper.exe", "piper"] {
+        let p = bin_dir.join(name);
+        if p.exists() && p.metadata().map(|m| m.len() > 1024).unwrap_or(false) {
+            return Ok(p);
+        }
+    }
+
+    Err(anyhow::anyhow!(
+        "piper not found. Tried binaries/piper/. Run: npm run setup"
+    ))
 }
 
 fn find_tts_model() -> Result<std::path::PathBuf> {
