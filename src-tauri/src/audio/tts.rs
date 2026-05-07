@@ -10,21 +10,24 @@ pub struct TtsClient;
 impl TtsClient {
     pub fn new(_port: u16) -> Self { Self }
 
-    pub async fn speak(&self, text: &str, log: &crate::monitor::SharedEventLog) -> Result<()> {
+    pub async fn speak(&self, text: &str, app: &tauri::AppHandle) -> Result<()> {
+        use crate::monitor::{emit_debug_event, new_event_log};
+        // Create a throw-away log since emit_debug_event requires one — events go live via app_handle
+        let dummy_log = new_event_log();
         let clean = clean_for_speech(text);
         if clean.trim().is_empty() { return Ok(()); }
 
-        let binary = find_piper().map_err(|e| {
-            crate::monitor::push_event(log, "[AUDIO]", format!("TTS: {e}"));
-            e
-        })?;
-        let model = find_tts_model().map_err(|e| {
-            crate::monitor::push_event(log, "[AUDIO]", format!("TTS: {e}"));
-            e
-        })?;
-        crate::monitor::push_event(log, "[AUDIO]", format!(
-            "TTS speaking {} chars via {}", clean.len(), binary.file_name().unwrap_or_default().to_string_lossy()
-        ));
+        let binary = match find_piper() {
+            Ok(b) => b,
+            Err(e) => { emit_debug_event(app, &dummy_log, "[AUDIO]", format!("TTS: {e}")).await; return Err(e); }
+        };
+        let model = match find_tts_model() {
+            Ok(m) => m,
+            Err(e) => { emit_debug_event(app, &dummy_log, "[AUDIO]", format!("TTS: {e}")).await; return Err(e); }
+        };
+        emit_debug_event(app, &dummy_log, "[AUDIO]", format!(
+            "TTS: {} chars → {}", clean.len(), binary.file_name().unwrap_or_default().to_string_lossy()
+        )).await;
         let tmp = std::env::temp_dir().join("proactive_tts.wav");
 
         // Piper reads text from stdin, writes WAV to --output_file
@@ -45,12 +48,12 @@ impl TtsClient {
         let status = child.wait().await?;
         if !status.success() {
             let msg = format!("piper exited {:?}", status.code());
-            crate::monitor::push_event(log, "[AUDIO]", format!("TTS error: {msg}"));
+            emit_debug_event(app, &dummy_log, "[AUDIO]", format!("TTS error: {msg}")).await;
             return Err(anyhow::anyhow!("{msg}"));
         }
 
         let wav = tokio::fs::read(&tmp).await?;
-        crate::monitor::push_event(log, "[AUDIO]", format!("TTS generated {} KB — playing", wav.len() / 1024));
+        emit_debug_event(app, &dummy_log, "[AUDIO]", format!("TTS: {} KB WAV — playing", wav.len() / 1024)).await;
         let _ = tokio::fs::remove_file(&tmp).await;
         let pcm = wav_to_f32(&wav);
         tokio::task::spawn_blocking(move || play_pcm_blocking(&pcm))

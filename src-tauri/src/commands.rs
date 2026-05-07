@@ -164,14 +164,16 @@ pub async fn download_required_models(
 pub async fn speak_text(
     text: String,
     event_log: State<'_, SharedEventLog>,
+    app_handle: tauri::AppHandle,
 ) -> CmdResult<()> {
     let log = event_log.inner().clone();
-    crate::monitor::push_event(&log, "[AUDIO]", format!("TTS triggered ({} chars)", text.len()));
+    crate::monitor::emit_debug_event(&app_handle, &log, "[AUDIO]",
+        format!("TTS triggered ({} chars)", text.len())).await;
     tauri::async_runtime::spawn(async move {
         let client = crate::audio::tts::TtsClient::new(0);
-        match client.speak(&text, &log).await {
-            Ok(()) => crate::monitor::push_event(&log, "[AUDIO]", "TTS done"),
-            Err(e) => crate::monitor::push_event(&log, "[AUDIO]", format!("TTS failed: {e}")),
+        match client.speak(&text, &app_handle).await {
+            Ok(()) => { crate::monitor::emit_debug_event(&app_handle, &log, "[AUDIO]", "TTS done").await; }
+            Err(e) => { crate::monitor::emit_debug_event(&app_handle, &log, "[AUDIO]", format!("TTS failed: {e}")).await; }
         }
     });
     Ok(())
