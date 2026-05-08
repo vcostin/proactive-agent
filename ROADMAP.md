@@ -34,6 +34,63 @@
 
 ---
 
+## 🔴 Needs Decision
+
+These items are blocked on a strategic choice. Nothing can be implemented until the direction is picked.
+
+---
+
+### 1. Installer strategy — bundle vs. thin
+
+**Current state:** 96 MB MSI that bundles the app + parakeet + llama + piper DLLs.
+`espeak-ng-data/` is still missing (piper TTS broken in production).
+
+**Option A — Keep bundling, fix the gaps**
+- Add the remaining missing files (`espeak-ng-data/`, `ggml-cpu-*.dll`, `libomp140`)
+- Installer grows to ~200-250 MB
+- Works fully offline after install
+- Every release ships the full binary stack even if nothing changed
+
+**Option B — Thin installer + wizard downloads**
+- Installer shrinks to ~110 MB (app exe + parakeet only)
+- Wizard downloads llama-server + DLLs from `ggerganov/llama.cpp` releases
+- Wizard downloads piper + DLLs + `espeak-ng-data/` from `rhasspy/piper` releases
+- Automatically fixes `espeak-ng-data` problem — piper zip already contains it correctly laid out
+- Requires internet on first run (already required for models anyway)
+- `binaries/` being gitignored becomes intentional, not a limitation
+- Individual components can be updated without a full reinstall
+
+**Blocker:** parakeet-server (see item 2 below).
+
+---
+
+### 2. Parakeet distribution — no public release URL
+
+**The problem:** `parakeet-server.exe` is a custom PyInstaller freeze of
+[groxaxo/parakeet-tdt-0.6b-v3-fastapi-openai](https://github.com/groxaxo/parakeet-tdt-0.6b-v3-fastapi-openai).
+There is no published binary anyone can download. It must be rebuilt from source
+every time (Python environment, PyInstaller, ~48 MB output).
+This also means **macOS and Linux would each need their own build**.
+
+**Options:**
+
+| Option | Effort | Notes |
+|--------|--------|-------|
+| A) Keep in installer (`externalBin`) | None | Current approach. Works but ties distribution to the one built binary |
+| B) Host on a private GitHub release | Low | Upload the `.exe` to a private repo release. Wizard downloads it. Automatable with GitHub Actions |
+| C) Replace parakeet with `ort` Rust crate | High | In-process ONNX inference, no Python, no PyInstaller. Cross-platform by default. See STT_MIGRATION.md |
+| D) Replace with Whisper.cpp via HTTP | Medium | `whisper-server` has public releases. Worse accuracy than Parakeet |
+| E) Use OpenAI-compatible STT API (cloud) | Low code | Whisper API, Groq, etc. Requires API key, not offline |
+
+**Recommendation when ready:** Option B unblocks thin installer immediately.
+Option C is the right long-term answer (removes Python dependency entirely).
+
+---
+
+### 3. (Space reserved — add yours here)
+
+---
+
 ## ⬜ Remaining
 
 ### Production installer — known gaps
