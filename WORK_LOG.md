@@ -130,10 +130,21 @@ Both were replaced in an earlier session that predates this work log.
   producing a permanent red dot in the debug panel. Removed in cleanup.
 
 **What is not documented:**
-The specific functional reasons why whisper and Kokoro were abandoned — what "didn't
-work as expected" in practice — were not recorded. The migration happened in a session
-without notes. If this matters for future decisions (e.g. reconsidering Kokoro),
-the failure mode should be re-investigated rather than assumed.
+The specific failure mode of Kokoro TTS was not recorded.
+
+**What is now known (added retrospectively):**
+The primary reason for replacing whisper.cpp was **STT accuracy** — it could not
+reliably transcribe the developer's voice. Recognition quality was poor enough to make
+voice input unusable in practice ("a disaster"). No amount of tuning resolved it.
+
+Parakeet TDT is a meaningful improvement in usability — transcription is far more
+intuitive — but it is still not perfect, particularly on non-native accents (which is
+a known model limitation of the 0.6B variant, not a configuration problem).
+
+This context matters for future STT decisions: the bar is not "perfect accuracy" but
+"accurate enough to be usable without frustration." Whisper failed that bar entirely.
+Parakeet clears it. If Parakeet is ever reconsidered, the replacement must demonstrably
+outperform it on the same voice, not just on benchmarks.
 
 ---
 
