@@ -115,6 +115,28 @@ assistant response → clean markdown → Piper subprocess (stdin→WAV file)
 
 ---
 
+## Component history — why Whisper and Kokoro were replaced
+
+The original architecture used **whisper.cpp** (STT) and **Kokoro TTS** (sherpa-onnx).
+Both were replaced in an earlier session that predates this work log.
+
+**What is documented:**
+- The flat `binaries/` layout that co-located whisper and llama DLLs caused
+  `STATUS_DLL_NOT_FOUND` and `STATUS_ENTRYPOINT_NOT_FOUND` crashes — DLL version
+  conflicts between the two sidecars. Solved by isolating each into its own subdirectory.
+- Kokoro was running as a long-running HTTP server (`kokoro-server`) but TTS was later
+  moved to a per-request Piper subprocess, which removed the server entirely.
+- The Kokoro sidecar health check was still pinging a server that no longer existed,
+  producing a permanent red dot in the debug panel. Removed in cleanup.
+
+**What is not documented:**
+The specific functional reasons why whisper and Kokoro were abandoned — what "didn't
+work as expected" in practice — were not recorded. The migration happened in a session
+without notes. If this matters for future decisions (e.g. reconsidering Kokoro),
+the failure mode should be re-investigated rather than assumed.
+
+---
+
 ## Key bugs fixed (comprehensive)
 
 | Bug | Root cause | Fix |
