@@ -37,6 +37,19 @@
       "../binaries/llama/llama-server",
       "../binaries/parakeet/parakeet-server",
       "../binaries/piper/piper"
-    ]
+    ],
+    "resources": {
+      "../binaries/llama/ggml.dll": "ggml.dll",
+      "../binaries/llama/ggml-base.dll": "ggml-base.dll",
+      "../binaries/llama/ggml-rpc.dll": "ggml-rpc.dll",
+      "../binaries/llama/ggml-vulkan.dll": "ggml-vulkan.dll",
+      "../binaries/llama/llama.dll": "llama.dll",
+      "../binaries/llama/llama-common.dll": "llama-common.dll",
+      "../binaries/llama/mtmd.dll": "mtmd.dll",
+      "../binaries/piper/espeak-ng.dll": "espeak-ng.dll",
+      "../binaries/piper/onnxruntime.dll": "onnxruntime.dll",
+      "../binaries/piper/onnxruntime_providers_shared.dll": "onnxruntime_providers_shared.dll",
+      "../binaries/piper/piper_phonemize.dll": "piper_phonemize.dll"
+    }
   }
 }

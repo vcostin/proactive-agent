@@ -27,20 +27,30 @@
 | Git hygiene | .gitattributes, CRLF warnings gone |
 | App icon | SVG source → all sizes via `npm run tauri icon` |
 | TTS test button | Debug panel → dev tools → "🔊 test voice" |
+| TTS speed fix | WAV resampled to device rate + mono→stereo upmix, plays at natural speed |
+| Kokoro/whisper cleanup | All dead code, binaries (~21 MB), scripts, and 2.1 GB Whisper models removed |
+| Production build | MSI (96 MB) + NSIS (74 MB) installers, DLLs bundled alongside sidecars |
+| Unit tests (TTS) | 13 tests: `wav_to_f32`, `resample`, `clean_for_speech` — run via `cargo test` |
 
 ---
 
 ## ⬜ Remaining
 
-### Verify TTS speed (first thing next session)
-The latest fix (sample rate + channel upmix) was just committed. Confirm voice plays
-at natural speed. Expected [AUDIO] log: `TTS: N KB @ 22050Hz 1ch — playing`.
+### Production installer — known gaps
+- `espeak-ng-data/` directory not bundled — piper can't convert text to phonemes without it.
+  Tauri resources map errors on directory globs; options:
+  (a) Pass `--espeak-data` flag to piper subprocess from `resource_dir()` + bundle via array format
+  (b) Download during SetupWizard first run
+- `ggml-cpu-*.dll` backends not bundled — GPU via Vulkan works (`ggml-vulkan.dll` is in),
+  but CPU multi-threading backends are absent. Fallback is reference (slow) CPU kernels.
+- `libomp140.x86_64.dll` not bundled — needed for OpenMP parallelism in llama-server.
+  Has `.x86_64` in name which confused Tauri's resource path validator; can be renamed.
+- VCRedist DLLs (VCRUNTIME140.dll etc.) handled by SetupWizard, not bundled directly.
 
-### Production build
-- `npm run tauri build` → produces installer at `src-tauri/target/release/bundle/msi/`
-- Debug commands already gated behind `#[cfg(debug_assertions)]`
-- Icon already set up from app-icon.svg
-- Verify sidecar bundling works in release package
+### Vitest / frontend tests
+- Add Vitest + `@tauri-apps/api/mocks` for React component tests
+- Priority targets: `useChat` (streaming, TTS routing), `SchedulerPanel` display logic
+- ~10 min to scaffold: install Vitest, configure vite.config.ts, add `npm test` script
 
 ### STT accuracy (low priority — model limitation)
 Parakeet TDT 0.6B struggles with non-native accents. Options if needed:

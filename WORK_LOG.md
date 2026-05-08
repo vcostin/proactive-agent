@@ -152,15 +152,14 @@ assistant response → clean markdown → Piper subprocess (stdin→WAV file)
 - Chat history persistence (localStorage)
 - Loading state (status dot, green=ready)
 - Voice input (mic → Parakeet STT → chat)
-- TTS voice output (🔊 toggle → Piper → cpal)
+- TTS voice output (🔊 toggle → Piper → cpal) — speed fix confirmed in code (resample + stereo upmix)
 - Memory reset (types RESET to confirm, wipes LanceDB + recent turns)
 - Graceful shutdown (sidecars killed, DLLs released)
 - Model parameters (temperature/top-p/context sliders)
 
 ### ⬜ Outstanding
-- TTS speed not yet verified at correct rate (latest fix just committed)
-- Production build test (`npm run tauri build`)
-- Real app icon (currently blue P on dark background from app-icon.svg)
+- Production installer gaps: `espeak-ng-data/` (piper phoneme data), `ggml-cpu-*.dll` backends, `libomp140`
 - macOS support (fetch script exists, untested)
 - STT accuracy (Parakeet 0.6B struggles with non-native accents — model limitation)
+- Frontend tests: Vitest + `@tauri-apps/api/mocks` scaffolding
 </content>
