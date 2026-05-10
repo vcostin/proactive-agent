@@ -115,6 +115,34 @@ assistant response → clean markdown → Piper subprocess (stdin→WAV file)
 
 ---
 
+## Episodic memory role-blurring bug (documented retrospectively)
+
+**The bug:** The LLM started confusing its own words with the user's words mid-conversation.
+It began responding as if it were the user, losing track of which conversation turns
+belonged to which participant. The user described it as "switching roles."
+
+**Root cause:** User turns and assistant turns were being stored in episodic memory without
+a role label, then retrieved as an undifferentiated block and injected into context.
+The LLM received a wall of past text with no signal about who said what — so it guessed,
+and guessed wrong.
+
+**User diagnosis (from live conversation):**
+> "It might be also the vector database problem, so you don't know what's yours and what's mine."
+
+This was correct. The model responded:
+> "It's almost as if our mental models are getting tangled together, making it difficult
+> to distinguish between what's mine and what's yours."
+
+**Fix:** Every episodic entry now carries a `role` field (`user` | `assistant`).
+Retrieval returns role-labeled turns. Context assembly injects them with explicit
+role prefixes so the LLM always knows whose words are whose.
+
+**Why this matters for future changes:** Any modification to `memory/episodic.rs`
+that removes, ignores, or flattens the role field will reintroduce this bug.
+The SUPERVISOR.md hard-stop list encodes this invariant explicitly.
+
+---
+
 ## Component history — why Whisper and Kokoro were replaced
 
 The original architecture used **whisper.cpp** (STT) and **Kokoro TTS** (sherpa-onnx).
