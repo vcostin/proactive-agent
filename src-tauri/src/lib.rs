@@ -147,7 +147,7 @@ pub fn run() {
             commands::get_debug_events,
             commands::get_gen_settings,
             commands::set_gen_settings,
-            commands::test_defer,
+            #[cfg(debug_assertions)] commands::test_defer,
             #[cfg(debug_assertions)] commands::diagnose_chat_server,
             commands::speak_text,
             commands::reset_chat,

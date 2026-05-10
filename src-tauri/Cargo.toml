@@ -36,6 +36,7 @@ futures = "0.3"
 cpal = "0.15"
 uuid = { version = "1", features = ["v4", "serde"] }
 regex = "1"
+sha2 = "0.10"
 
 [package.metadata.bundle]
 identifier = "com.proactive.agent"

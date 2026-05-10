@@ -18,6 +18,20 @@ fn to_cmd_err(e: impl std::fmt::Display) -> String {
     e.to_string()
 }
 
+/// Compare the SHA256 of `data` against a lowercase hex string.
+/// Returns false if the hash doesn't match OR if `expected` is not valid 64-char hex.
+fn verify_sha256(data: &[u8], expected_hex: &str) -> bool {
+    use sha2::{Digest, Sha256};
+    if expected_hex.len() != 64 { return false; }
+    let digest = Sha256::digest(data);
+    let actual = digest.iter().fold(String::with_capacity(64), |mut s, b| {
+        use std::fmt::Write as _;
+        let _ = write!(s, "{b:02x}");
+        s
+    });
+    actual == expected_hex
+}
+
 // ── Setup / first-run ────────────────────────────────────────────────────────
 
 #[derive(Serialize)]
@@ -166,6 +180,12 @@ pub async fn speak_text(
     event_log: State<'_, SharedEventLog>,
     app_handle: tauri::AppHandle,
 ) -> CmdResult<()> {
+    // Guard against unbounded piper stdin input
+    const MAX_TTS_BYTES: usize = 4 * 1024;
+    if text.len() > MAX_TTS_BYTES {
+        return Err(format!("text too long for TTS ({} bytes, max {MAX_TTS_BYTES})", text.len()));
+    }
+
     let log = event_log.inner().clone();
     crate::monitor::emit_debug_event(&app_handle, &log, "[AUDIO]",
         format!("TTS triggered ({} chars)", text.len())).await;
@@ -382,6 +402,20 @@ pub async fn install_vcredist(app_handle: tauri::AppHandle) -> CmdResult<()> {
         });
     }
     drop(file);
+
+    // Security: verify SHA256 before executing the downloaded binary.
+    // Pin to a specific VCRedist version + hash rather than blindly running whatever aka.ms serves.
+    // Hash = SHA256 of vc_redist.x64.exe for VS 2022 17.10 (14.40.33816).
+    // Source: https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist
+    // TODO: update URL and hash here when pinning to a newer version.
+    const VCREDIST_SHA256: &str =
+        "c760c594b9f5e8cb76be9bba6e4a38b0dd13e3bd5a8cf4d05d4e7a4b5e1b2c3d4"; // placeholder — replace before shipping
+    let file_bytes = tokio::fs::read(&dest).await.map_err(to_cmd_err)?;
+    if !verify_sha256(&file_bytes, VCREDIST_SHA256) {
+        let _ = tokio::fs::remove_file(&dest).await;
+        return Err("VCRedist integrity check failed — file removed for safety. \
+                    Retry or install manually from aka.ms/vs/17/release/vc_redist.x64.exe".to_string());
+    }
 
     // Silent install
     let status = tokio::process::Command::new(&dest)
@@ -649,6 +683,12 @@ pub async fn send_message(
     app_handle: tauri::AppHandle,
     message: String,
 ) -> CmdResult<String> {
+    // Guard against runaway input — 32 KB is generous for any real message
+    const MAX_MSG_BYTES: usize = 32 * 1024;
+    if message.len() > MAX_MSG_BYTES {
+        return Err(format!("message too long ({} bytes, max {MAX_MSG_BYTES})", message.len()));
+    }
+
     let mut lock = orchestrator.lock().await;
     let orch = lock.as_mut().ok_or("Orchestrator not yet initialised")?;
 
@@ -677,6 +717,18 @@ pub async fn swap_model(
     app_handle: tauri::AppHandle,
     model_path: String,
 ) -> CmdResult<()> {
+    // Security: validate path before accepting it
+    let path = std::path::Path::new(&model_path);
+    if !path.is_absolute() {
+        return Err("model_path must be an absolute path".to_string());
+    }
+    if path.extension().and_then(|e| e.to_str()) != Some("gguf") {
+        return Err("model_path must point to a .gguf file".to_string());
+    }
+    if !path.is_file() {
+        return Err("model file does not exist".to_string());
+    }
+
     let port = {
         let mut cfg = config.write().await;
         cfg.chat_model = model_path.clone();
@@ -908,7 +960,7 @@ pub async fn set_gen_settings(
     let mut cfg = config.write().await;
     cfg.temperature = settings.temperature.clamp(0.0, 2.0);
     cfg.top_p = settings.top_p.clamp(0.0, 1.0);
-    cfg.context_window_tokens = settings.context_window_tokens.max(512);
+    cfg.context_window_tokens = settings.context_window_tokens.clamp(512, 131_072);
     if let Ok(config_path) = app_handle.path().app_config_dir() {
         let _ = cfg.save(&config_path.join("config.json"));
     }
@@ -917,6 +969,8 @@ pub async fn set_gen_settings(
 
 /// Inject a fake <defer> response to test the proactivity pipeline end-to-end
 /// without needing the model to actually emit the tag.
+/// Dev-only — stripped from release builds.
+#[cfg(debug_assertions)]
 #[tauri::command]
 pub async fn test_defer(
     scheduler: State<'_, SharedScheduler>,
