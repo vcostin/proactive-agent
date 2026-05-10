@@ -46,8 +46,11 @@ export default function App() {
     );
   }
 
-  // First run or no model selected
-  if (!setupStatus.ready) {
+  // Show wizard when: no model selected, OR required binaries are missing.
+  // Binaries missing → wizard lands on Step 1 (download tools).
+  // No model → wizard lands on Step 3 (pick chat model).
+  const binariesMissing = !setupStatus.binaries.llama_ready || !setupStatus.binaries.piper_ready;
+  if (!setupStatus.ready || binariesMissing) {
     return <SetupWizard status={setupStatus} onComplete={handleSetupComplete} />;
   }
 

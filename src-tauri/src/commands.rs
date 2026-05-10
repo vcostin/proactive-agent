@@ -18,6 +18,17 @@ fn to_cmd_err(e: impl std::fmt::Display) -> String {
     e.to_string()
 }
 
+/// Emit a debug event from a synchronous context (e.g. std::thread).
+/// AppHandle::emit is sync so this works without an async runtime.
+fn debug_event_sync(app: &tauri::AppHandle, message: String) {
+    use tauri::Emitter;
+    let _ = app.emit("debug_event", crate::monitor::DebugEvent {
+        timestamp: chrono::Utc::now(),
+        component: "[AUDIO]".to_string(),
+        message,
+    });
+}
+
 /// Compare the SHA256 of `data` against a lowercase hex string.
 /// Returns false if the hash doesn't match OR if `expected` is not valid 64-char hex.
 fn verify_sha256(data: &[u8], expected_hex: &str) -> bool {
@@ -245,6 +256,7 @@ pub async fn start_voice_input(
     // Channel to get the actual sample rate/channels back from the audio thread
     let (cfg_tx, cfg_rx) = std::sync::mpsc::channel::<(u32, u16)>();
     let energy_arc = audio_energy.inner().clone();
+    let app_for_thread = app_handle.clone();
 
     // audio capture: stays on its own thread (cpal::Stream is !Send on WASAPI)
     let thread_result = std::thread::Builder::new()
@@ -254,13 +266,13 @@ pub async fn start_voice_input(
                 Ok(capture) => {
                     let sr = capture.sample_rate;
                     let ch = capture.channels;
-                    eprintln!("[AUDIO] capture started: {sr} Hz, {ch} ch");
+                    debug_event_sync(&app_for_thread, format!("capture started: {sr} Hz, {ch} ch"));
                     // Send actual device config so STT loop uses the correct sample rate
                     let _ = cfg_tx.send((sr, ch));
                     while !stop_clone.load(Ordering::Relaxed) {
                         std::thread::sleep(std::time::Duration::from_millis(50));
                     }
-                    eprintln!("[AUDIO] capture stopped");
+                    debug_event_sync(&app_for_thread, "capture stopped".to_string());
                 }
                 Err(e) => eprintln!("[AUDIO] capture failed: {e}"),
             }
@@ -347,7 +359,7 @@ pub async fn check_system_deps() -> CmdResult<SystemDeps> {
 async fn test_llama_binary() -> (bool, String) {
     let binary = match crate::find_sidecar("llama-server") {
         Some(b) => b,
-        None => return (false, "binary not found — run: npm run setup".to_string()),
+        None => return (false, "binary not found — use the Setup Wizard to download it".to_string()),
     };
     let dll_dir = binary.parent()
         .map(|p| p.to_path_buf())

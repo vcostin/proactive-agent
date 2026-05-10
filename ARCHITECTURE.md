@@ -308,36 +308,62 @@ common local services. If 18080 is taken, change `llama_port` in `config.json`.
 
 ---
 
-## Binary layout (dev)
+## Binary layout
+
+### Dev (`project/binaries/` — gitignored, populated by `npm run setup`)
 
 ```
-binaries/                  (gitignored — populated by npm run setup)
+binaries/
 ├── llama/
 │   ├── llama-server-x86_64-pc-windows-msvc.exe
-│   ├── ggml.dll
-│   ├── ggml-base.dll
-│   ├── ggml-vulkan.dll        ← Vulkan GPU backend
-│   ├── ggml-cpu-*.dll         ← CPU dispatch variants (alderlake, haswell, etc.)
-│   ├── llama.dll
-│   ├── llama-common.dll
-│   ├── mtmd.dll
-│   └── libomp140.x86_64.dll  ← OpenMP parallelism
+│   ├── ggml.dll, ggml-base.dll, ggml-vulkan.dll
+│   ├── ggml-cpu-*.dll         ← CPU dispatch variants
+│   ├── llama.dll, llama-common.dll, mtmd.dll
+│   └── libomp140.x86_64.dll
 ├── parakeet/
-│   ├── parakeet-server-x86_64-pc-windows-msvc.exe
-│   └── models/               ← ONNX model cache (downloaded by server on first run)
+│   ├── parakeet-server-x86_64-pc-windows-msvc.exe  ← manual build, no download URL
+│   └── models/
 └── piper/
     ├── piper-x86_64-pc-windows-msvc.exe
-    ├── espeak-ng.dll
-    ├── onnxruntime.dll
-    ├── onnxruntime_providers_shared.dll
-    ├── piper_phonemize.dll
-    └── espeak-ng-data/       ← phoneme dictionaries (~10 MB, ~200 language files)
+    ├── espeak-ng.dll, onnxruntime.dll, piper_phonemize.dll, ...
+    └── espeak-ng-data/
 ```
 
+### Production — two separate locations
+
+**Installer bundle** (`C:\Program Files\proactive-agent\` or equivalent):
+```
+proactive-agent.exe
+parakeet-server-x86_64-pc-windows-msvc.exe   ← only bundled binary
+```
+
+**Wizard-downloaded** (`%APPDATA%\com.proactive.agent\binaries\`):
+```
+llama/
+    llama-server-x86_64-pc-windows-msvc.exe + all DLLs
+piper/
+    piper-x86_64-pc-windows-msvc.exe + DLLs + espeak-ng-data/
+```
+
+**Why AppData, not the exe directory:**
+The exe directory (`Program Files`) requires admin rights to write.
+The wizard downloads without elevation — AppData is always user-writable.
+
+**Why only parakeet is bundled:**
+`llama-server` and `piper` have public GitHub releases and are downloaded by
+the wizard at first run. Parakeet has no public release URL (PyInstaller frozen binary,
+manual build) — it must be pre-bundled. See `ROADMAP.md § Needs Decision`.
+
+### `find_sidecar()` search order (release)
+
+1. `AppData/com.proactive.agent/binaries/{short}/{filename}` — wizard-downloaded
+2. `AppData/.../binaries/{filename}` — flat fallback
+3. `{exe_dir}/{short}/{filename}` — installer-bundled (parakeet)
+4. `{exe_dir}/{filename}` — flat installer fallback
+
 **DLL isolation:** each sidecar lives in its own subdirectory so their DLLs cannot
-conflict. `find_sidecar()` searches subdirectory first, then root as a legacy fallback.
-`spawn_direct()` prepends the binary's parent directory to `PATH` before launching, so
-Windows finds the right DLL version even if the same DLL name exists elsewhere.
+conflict. `spawn_direct()` prepends the binary's parent directory to `PATH` so
+Windows finds the right DLL version regardless of what else is on the system PATH.
 
 ---
 

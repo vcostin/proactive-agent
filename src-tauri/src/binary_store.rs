@@ -284,8 +284,9 @@ fn extract_zip_piper(data: &[u8], dest_dir: &Path, dest_exe_name: &str) -> Resul
         let raw_name = entry.name().to_owned();
         let lower = raw_name.to_lowercase();
 
-        // piper executable
-        if lower.ends_with("piper.exe") || lower.ends_with("/piper") {
+        // piper executable — match platform-specific name via constant
+        let piper_exe_lower = platform::PIPER_EXE.to_lowercase();
+        if lower.ends_with(&piper_exe_lower) {
             let dest = dest_dir.join(dest_exe_name);
             let mut out = std::fs::File::create(dest)?;
             std::io::copy(&mut entry, &mut out)?;
@@ -326,7 +327,7 @@ fn extract_targz_piper(data: &[u8], dest_dir: &Path, dest_exe_name: &str) -> Res
         let path = entry.path()?.into_owned();
         let lower = path.to_string_lossy().to_lowercase();
 
-        if lower.ends_with("/piper") || lower == "piper" {
+        if lower.ends_with(&format!("/{}", platform::PIPER_EXE)) || lower == platform::PIPER_EXE {
             let dest = dest_dir.join(dest_exe_name);
             entry.unpack(&dest)?;
             continue;
