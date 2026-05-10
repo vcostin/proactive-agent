@@ -26,15 +26,27 @@ git checkout -b feat/my-thing
 git add -p
 git commit -m "feat: describe the change"
 
-# 3. Merge locally and push
+# 3. Push branch and TEST
+git push -u origin feat/my-thing
+# → run npm run tauri dev on the branch
+# → verify the feature works end-to-end by hand
+# → fix anything that broke, commit fixes to the branch
+# → do NOT merge until you have tested it yourself
+
+# 4. Merge only after passing hands-on test
 git checkout master
 git merge --no-ff feat/my-thing   # --no-ff preserves branch in history
 git push
 
-# 4. Clean up
+# 5. Clean up
 git branch -d feat/my-thing
+git push origin --delete feat/my-thing
 ```
 
+> **Rule: master is only touched after a human has tested the branch.**
+> Code compiling and tests passing is not enough — the feature must work
+> in the running app before it merges.
+>
 > **Note:** PRs are skipped for now — this is a small solo project and the overhead
 > isn't justified yet. Switch to the full PR review cycle when the architecture
 > stabilises (primary trigger: Python dependency removed from the stack).
@@ -79,8 +91,12 @@ When an AI assistant (Claude, etc.) works on this repo:
 
 1. AI creates a feature branch at session start: `feat/session-description`
 2. All edits stay on that branch — **never edit the main working tree directly**
-3. AI merges to master locally and pushes when work is complete
-4. If the AI session tool creates a worktree, all edits go into that worktree's branch only
+3. AI pushes the branch and **stops** — it does not merge to master
+4. Human tests the feature on the branch, then merges when satisfied
+5. If the AI session tool creates a worktree, all edits go into that worktree's branch only
 
-If a direct-to-master exception is taken, the AI must note it in the commit message with
-a brief reason — not for process's sake, but so the history is readable.
+**The AI never merges to master.** That step belongs to the human after hands-on testing.
+
+If a direct-to-master exception is taken (e.g. docs-only, emergency fix), the AI must
+note it in the commit message with a brief reason — not for process's sake, but so the
+history is readable.
