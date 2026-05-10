@@ -1,4 +1,5 @@
 mod audio;
+pub mod binary_store;
 mod commands;
 mod config;
 mod memory;
@@ -131,6 +132,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::get_setup_status,
+            commands::check_binaries_ready,
+            commands::download_required_binaries,
             commands::check_system_deps,
             commands::install_vcredist,
             #[cfg(debug_assertions)] commands::open_llama_diagnostic,

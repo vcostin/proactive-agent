@@ -42,6 +42,8 @@ pub struct SetupStatus {
     /// Parakeet TDT ONNX model files present in binaries/parakeet/models/
     pub stt_model_ready: bool,
     pub data_dir: String,
+    /// Whether llama-server and piper binaries are present and ready.
+    pub binaries: crate::binary_store::BinariesStatus,
 }
 
 #[derive(Clone, Serialize)]
@@ -66,7 +68,23 @@ pub async fn get_setup_status(config: State<'_, SharedConfig>) -> CmdResult<Setu
             .unwrap_or(&cfg.models_dir)
             .to_string_lossy()
             .into_owned(),
+        binaries: crate::binary_store::check_binaries(),
     })
+}
+
+/// Check which sidecar binaries are present without triggering a download.
+#[tauri::command]
+pub async fn check_binaries_ready() -> CmdResult<crate::binary_store::BinariesStatus> {
+    Ok(crate::binary_store::check_binaries())
+}
+
+/// Download llama-server and piper for the current OS/arch.
+/// Emits `download_progress` events. Parakeet is excluded — no public release URL.
+#[tauri::command]
+pub async fn download_required_binaries(app_handle: tauri::AppHandle) -> CmdResult<()> {
+    crate::binary_store::download_all(&app_handle)
+        .await
+        .map_err(to_cmd_err)
 }
 
 /// Open a native file-picker filtered to .gguf files.

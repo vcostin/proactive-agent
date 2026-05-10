@@ -1,5 +1,13 @@
 // Mirror types for the Rust structs exposed via Tauri commands.
 
+export interface BinariesStatus {
+  llama_ready: boolean;
+  piper_ready: boolean;
+  /** Always false until manually provided — no public release URL */
+  parakeet_ready: boolean;
+  parakeet_note: string;
+}
+
 export interface SetupStatus {
   ready: boolean;
   chat_model: string;
@@ -7,6 +15,7 @@ export interface SetupStatus {
   /** Parakeet TDT ONNX model files present */
   stt_model_ready: boolean;
   data_dir: string;
+  binaries: BinariesStatus;
 }
 
 export interface DownloadProgress {
