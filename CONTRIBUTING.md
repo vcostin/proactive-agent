@@ -23,20 +23,22 @@ git checkout master && git pull
 git checkout -b feat/my-thing
 
 # 2. Work, commit often
-git add -p          # stage selectively
+git add -p
 git commit -m "feat: describe the change"
 
-# 3. Push and open PR
-git push -u origin feat/my-thing
-gh pr create --fill
+# 3. Merge locally and push
+git checkout master
+git merge --no-ff feat/my-thing   # --no-ff preserves branch in history
+git push
 
-# 4. Merge (squash for noisy branches, merge commit for clean ones)
-gh pr merge --squash    # or --merge
-
-# 5. Clean up
-git checkout master && git pull
+# 4. Clean up
 git branch -d feat/my-thing
 ```
+
+> **Note:** PRs are skipped for now — this is a small solo project and the overhead
+> isn't justified yet. Switch to the full PR review cycle when the architecture
+> stabilises (primary trigger: Python dependency removed from the stack).
+> The branch discipline stays the same regardless.
 
 ## Commit message format
 
@@ -75,10 +77,10 @@ EXCEPTION: direct-to-master — CVE patch with no API changes, low risk.
 
 When an AI assistant (Claude, etc.) works on this repo:
 
-1. AI creates a feature branch: `feat/session-description`
-2. All edits stay on that branch — **never edit main project files directly**
-3. AI opens a PR when work is done; human reviews and merges
+1. AI creates a feature branch at session start: `feat/session-description`
+2. All edits stay on that branch — **never edit the main working tree directly**
+3. AI merges to master locally and pushes when work is complete
 4. If the AI session tool creates a worktree, all edits go into that worktree's branch only
 
-If a direct-to-master exception is taken (e.g. emergency fix mid-session), the AI must
-add a comment in the PR or commit explaining why the normal flow was bypassed.
+If a direct-to-master exception is taken, the AI must note it in the commit message with
+a brief reason — not for process's sake, but so the history is readable.
