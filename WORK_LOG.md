@@ -143,6 +143,85 @@ The SUPERVISOR.md hard-stop list encodes this invariant explicitly.
 
 ---
 
+## Wizard-owned binary downloads — architecture decision
+
+### The problem that triggered it
+
+Running `npm run tauri dev` with an empty `binaries/` folder failed at **compile time**
+with `resource path does not exist`. The Tauri build script validates all `externalBin`
+and `resources` entries before Cargo even starts compiling. This made it impossible to
+launch the app to reach the wizard that would have downloaded the missing binaries —
+a classic chicken-and-egg problem.
+
+The first attempt was stub files: create 0-byte placeholders to satisfy the build check,
+then let the wizard replace them with real binaries. This was rejected as the wrong
+approach — stubs are a symptom fix that papers over a structural problem.
+
+### The real problem
+
+The root cause was that `llama-server` and `piper` were listed in `externalBin` and
+`resources` in `tauri.conf.json`. This told Tauri to:
+1. Validate they exist at build time
+2. Bundle them into the installer
+
+Both of those are wrong if the wizard is responsible for downloading them. Having the
+installer bundle them AND having the wizard download them is doing the same job twice,
+and creates the compile-time dependency that broke the dev workflow.
+
+### The fix
+
+**`llama-server` and `piper` removed from `externalBin` and `resources`.**
+Only `parakeet-server` remains in `externalBin` — it is the one binary that has no
+public download URL and must be manually provided and bundled.
+
+Consequences:
+- No compile-time check for llama or piper — the build succeeds with an empty `binaries/`
+- The installer no longer bundles them — installer is smaller
+- The wizard is the single source of truth for getting them onto the machine
+
+### binaries_dir() in release — AppData not exe directory
+
+Removing them from `externalBin` means the installer no longer places them alongside
+the exe. The wizard needs somewhere to download them. The exe directory
+(`C:\Program Files\proactive-agent\`) requires admin rights to write — not acceptable.
+
+**Release `binaries_dir()` now returns AppData:**
+- Windows: `%APPDATA%\com.proactive.agent\binaries\`
+- macOS: `~/Library/Application Support/com.proactive.agent/binaries/`
+- Linux: `~/.local/share/com.proactive.agent/binaries/`
+
+This is user-writable, matches the path Tauri already uses for `config.json`, and
+survives app updates without needing admin rights.
+
+### find_sidecar() — checks both AppData and exe directory
+
+Parakeet is still bundled via `externalBin` and placed next to the exe by the installer.
+`find_sidecar()` in release now checks both:
+1. AppData binaries dir — wizard-downloaded llama and piper
+2. Exe directory — installer-bundled parakeet
+
+Dev mode is unchanged: `npm run setup` downloads to `project/binaries/` and
+`find_sidecar()` looks there.
+
+### Dev workflow
+
+```
+npm run setup        # downloads llama + piper + models to project/binaries/
+npm run tauri dev    # works even with empty binaries/ — no compile-time check
+```
+
+### Production workflow (end user)
+
+```
+Install .msi / setup.exe      # installs app + parakeet only
+Launch proactive-agent        # wizard appears
+Step 1: Downloads llama-server + piper to AppData (no admin rights)
+Step 2: Downloads nomic-embed-text + Parakeet ONNX models
+Step 3: User picks a .gguf chat model
+```
+
+---
+
 ## Component history — why Whisper and Kokoro were replaced
 
 The original architecture used **whisper.cpp** (STT) and **Kokoro TTS** (sherpa-onnx).
