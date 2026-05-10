@@ -159,7 +159,15 @@ if (Test-Path $piperExe) {
             # Copy DLLs alongside piper.exe
             Get-ChildItem $piperBin.Directory -Filter "*.dll" |
                 ForEach-Object { Copy-Item $_.FullName $PiperBinDir -Force }
-            Write-Host "  OK piper.exe"
+            # Copy espeak-ng-data/ — required for phonemization (piper fails without it)
+            $espeakData = Join-Path $piperBin.Directory "espeak-ng-data"
+            if (Test-Path $espeakData) {
+                Copy-Item $espeakData $PiperBinDir -Recurse -Force
+                Write-Host "  OK piper.exe + espeak-ng-data"
+            } else {
+                Write-Warning "espeak-ng-data not found in piper zip — TTS phonemization will fail"
+                Write-Host "  OK piper.exe (no espeak-ng-data)"
+            }
         } else {
             Write-Warning "piper.exe not found in zip"
         }
