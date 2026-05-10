@@ -204,20 +204,74 @@ pub async fn emit_debug_event(
 
 // ── Health-check polling loop ─────────────────────────────────────────────────
 
+/// Tri-state for a sidecar: online, loading model, or offline.
+/// "loading" is distinct from "offline" — it means the process is up
+/// but not yet ready (llama-server returns 503 while loading the GGUF).
+#[derive(Debug, Clone, PartialEq)]
+enum SidecarState {
+    Online,
+    Loading,  // 503 + body contains "loading model"
+    Offline,
+}
+
+impl SidecarState {
+    fn is_alive(&self) -> bool { matches!(self, SidecarState::Online) }
+    fn as_str(&self) -> &'static str {
+        match self {
+            SidecarState::Online  => "online",
+            SidecarState::Loading => "loading",
+            SidecarState::Offline => "offline",
+        }
+    }
+}
+
+/// Poll a single sidecar and return its state + http status code.
+async fn poll_sidecar(client: &Client, port: u16) -> (SidecarState, u16, u64) {
+    let url = format!("http://127.0.0.1:{port}/health");
+    let start = std::time::Instant::now();
+    match client.get(&url).send().await {
+        Ok(r) => {
+            let status = r.status();
+            let latency = start.elapsed().as_millis() as u64;
+            let state = if status.is_success() {
+                SidecarState::Online
+            } else if status.as_u16() == 503 {
+                // llama.cpp returns 503 + {"status":"loading model"} while the GGUF loads
+                let body = r.text().await.unwrap_or_default();
+                if body.contains("loading") {
+                    SidecarState::Loading
+                } else {
+                    SidecarState::Offline
+                }
+            } else {
+                SidecarState::Offline
+            };
+            (state, status.as_u16(), latency)
+        }
+        Err(_) => (SidecarState::Offline, 0, start.elapsed().as_millis() as u64),
+    }
+}
+
 /// Long-running task — polls each sidecar's /health endpoint every 5 seconds
 /// and emits `sidecar_health` events to the frontend.
+///
+/// State transitions are debounced: a state change is only committed (and logged)
+/// after 2 consecutive polls agree. This eliminates the online/offline flicker
+/// that occurs while llama-server is loading its model file.
 pub async fn run_monitor_loop(
     config: Arc<tokio::sync::RwLock<crate::config::AppConfig>>,
     event_log: SharedEventLog,
     app_handle: tauri::AppHandle,
 ) {
     let client = Client::builder()
-        .timeout(std::time::Duration::from_secs(2))
+        .timeout(std::time::Duration::from_secs(3))
         .build()
         .unwrap_or_default();
 
-    // Track previous alive state per sidecar — only log on state transitions
-    let mut prev_alive: std::collections::HashMap<&str, bool> = std::collections::HashMap::new();
+    // committed: last stable state per sidecar
+    // pending:   (candidate state, consecutive count) — must reach 2 to commit
+    let mut committed: std::collections::HashMap<String, SidecarState> = std::collections::HashMap::new();
+    let mut pending:   std::collections::HashMap<String, (SidecarState, u8)> = std::collections::HashMap::new();
 
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
     loop {
@@ -234,34 +288,38 @@ pub async fn run_monitor_loop(
         ];
 
         for (name, port) in sidecars {
-            let url = format!("http://127.0.0.1:{port}/health");
-            let start = std::time::Instant::now();
-            let (alive, status_code) =
-                match client.get(&url).send().await {
-                    Ok(r) => (r.status().is_success(), r.status().as_u16()),
-                    Err(_) => (false, 0u16),
-                };
-            let latency_ms = start.elapsed().as_millis() as u64;
+            let (state, status_code, latency_ms) = poll_sidecar(&client, port).await;
 
-            // Only emit event log entry when state changes — not every 5 seconds
-            let was_alive = prev_alive.get(name).copied();
-            if was_alive != Some(alive) {
-                let msg = if alive {
-                    format!("sidecar {name} :{port} → online ({latency_ms}ms)")
+            // Debounce: accumulate consecutive polls, commit after 2 agree
+            let confirmed = {
+                let entry = pending.entry(name.to_string()).or_insert((state.clone(), 0));
+                if entry.0 == state {
+                    entry.1 += 1;
                 } else {
-                    format!("sidecar {name} :{port} → offline")
+                    *entry = (state.clone(), 1);
+                }
+                entry.1 >= 2
+            };
+
+            let prev = committed.get(name);
+            if confirmed && prev != Some(&state) {
+                let msg = match &state {
+                    SidecarState::Online  => format!("sidecar {name} :{port} → online ({latency_ms}ms)"),
+                    SidecarState::Loading => format!("sidecar {name} :{port} → loading model…"),
+                    SidecarState::Offline => format!("sidecar {name} :{port} → offline"),
                 };
                 emit_debug_event(&app_handle, &event_log, "[MONITOR]", msg).await;
-                prev_alive.insert(name, alive);
+                committed.insert(name.to_string(), state.clone());
             }
 
             let _ = app_handle.emit(
                 "sidecar_health",
                 serde_json::json!({
-                    "name": name,
-                    "alive": alive,
-                    "port": port,
-                    "latency_ms": latency_ms,
+                    "name":        name,
+                    "alive":       state.is_alive(),
+                    "state":       state.as_str(),   // "online" | "loading" | "offline"
+                    "port":        port,
+                    "latency_ms":  latency_ms,
                     "status_code": status_code,
                 }),
             );

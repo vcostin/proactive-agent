@@ -60,6 +60,7 @@ export interface DeferredMessage {
 export interface SidecarHealthEvent {
   name: string;
   alive: boolean;
+  state: 'online' | 'loading' | 'offline';
   port: number;
   latency_ms: number;
   status_code: number;

@@ -19,22 +19,31 @@ export function SidecarHealth() {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
       {SIDECARS.map(name => {
         const s = health[name];
-        const alive = s?.alive ?? null;
-        const dot = alive === null ? '#555' : alive ? '#55c477' : '#e05555';
+        const state = s?.state ?? null;
+        const dot   = state === null     ? '#555'
+                    : state === 'online'  ? '#55c477'
+                    : state === 'loading' ? '#c4a000'
+                    :                       '#e05555';
+        const glow  = state === 'online'  || state === 'loading';
+        const label = state === 'loading' ? 'loading…' : null;
         const latency = s?.latency_ms ?? '—';
-        const port = s?.port ?? '—';
+        const port    = s?.port ?? '—';
 
         return (
           <div key={name} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <span style={{
               width: 8, height: 8, borderRadius: '50%',
               background: dot, flexShrink: 0,
-              boxShadow: alive ? `0 0 4px ${dot}` : 'none',
+              boxShadow: glow ? `0 0 4px ${dot}` : 'none',
+              animation: state === 'loading' ? 'blink 1.2s ease-in-out infinite' : 'none',
             }} />
             <span style={{ width: 60, color: 'var(--text)' }}>{name}</span>
             <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>:{port}</span>
+            {label && (
+              <span style={{ fontSize: 10, color: '#c4a000' }}>{label}</span>
+            )}
             <span style={{ flex: 1 }} />
-            {s && (
+            {s && !label && (
               <span style={{ fontSize: 11, color: (s.latency_ms > 500 ? '#c47a00' : 'var(--text-muted)') }}>
                 {latency} ms
               </span>
