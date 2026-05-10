@@ -165,7 +165,6 @@ pub async fn run_stt_loop(
                 if buffer.len() >= min_samples {
                     // Run CPU-bound rubato resampling off the tokio executor thread
                     let buf = buffer.clone();
-                    let _app = app_handle.clone();
                     let (prepared, resampled_ok) = tokio::task::spawn_blocking(
                         move || prepare_for_stt(&buf, sample_rate, channels)
                     ).await.unwrap_or_else(|_| (buffer.clone(), false));
