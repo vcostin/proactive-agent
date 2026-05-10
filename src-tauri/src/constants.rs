@@ -11,6 +11,13 @@
 /// Defined here AND re-exported from lib.rs as `crate::SIDECAR_HOST`.
 pub const SIDECAR_HOST: &str = "127.0.0.1";
 
+// ── Audio ─────────────────────────────────────────────────────────────────────
+
+/// Target sample rate for STT input. Parakeet TDT (and Whisper) were trained
+/// on 16 kHz mono audio — sending the native device rate and relying on the
+/// server to resample gives lower quality than doing it ourselves with rubato.
+pub const STT_SAMPLE_RATE: u32 = 16_000;
+
 // ── Model filenames ───────────────────────────────────────────────────────────
 
 /// Embed model filename inside `models_dir`. Fixed — changing this requires

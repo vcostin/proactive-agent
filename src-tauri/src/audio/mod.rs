@@ -27,10 +27,14 @@ fn amplify(samples: &[f32], _gain: f32) -> Vec<f32> {
     samples.iter().map(|&s| (s * gain).clamp(-1.0, 1.0)).collect()
 }
 
-/// Downmix stereo→mono and resample to 16000 Hz.
-/// Whisper only processes 16000 Hz mono — sending 48000 Hz stereo
-/// makes it hear everything at 3× wrong speed and in double.
-fn prepare_for_stt(samples: &[f32], sample_rate: u32, channels: u16) -> Vec<f32> {
+/// Downmix stereo→mono then resample to STT_SAMPLE_RATE (16 kHz) using
+/// rubato's FFT-based sinc resampler — high quality, handles any device rate.
+/// The ratio is computed from the actual cpal device rate, so this works
+/// correctly for 44100, 48000, 96000 Hz or anything else a mic might report.
+fn prepare_for_stt(samples: &[f32], device_rate: u32, channels: u16) -> Vec<f32> {
+    use rubato::{FftFixedIn, Resampler};
+    use crate::constants::STT_SAMPLE_RATE;
+
     // Step 1: downmix to mono
     let mono: Vec<f32> = if channels <= 1 {
         samples.to_vec()
@@ -41,23 +45,35 @@ fn prepare_for_stt(samples: &[f32], sample_rate: u32, channels: u16) -> Vec<f32>
             .collect()
     };
 
-    // Step 2: resample to 16000 Hz via linear interpolation
-    const WHISPER_RATE: u32 = 16000;
-    if sample_rate == WHISPER_RATE {
+    // Step 2: resample to 16 kHz (no-op if device already runs at that rate)
+    if device_rate == STT_SAMPLE_RATE || mono.is_empty() {
         return mono;
     }
-    let ratio = sample_rate as f64 / WHISPER_RATE as f64;
-    let out_len = (mono.len() as f64 / ratio) as usize;
-    let mut out = Vec::with_capacity(out_len);
-    for i in 0..out_len {
-        let pos = i as f64 * ratio;
-        let idx = pos as usize;
-        let frac = (pos - idx as f64) as f32;
-        let s0 = mono.get(idx).copied().unwrap_or(0.0);
-        let s1 = mono.get(idx + 1).copied().unwrap_or(0.0);
-        out.push(s0 + (s1 - s0) * frac);
+
+    let chunk_size = mono.len();
+    let resampler = FftFixedIn::<f32>::new(
+        device_rate as usize,
+        STT_SAMPLE_RATE as usize,
+        chunk_size,
+        2,   // sub-chunks — 2 balances quality vs memory
+        1,   // channels (mono at this point)
+    );
+
+    match resampler {
+        Ok(mut r) => {
+            match r.process(&[mono.clone()], None) {
+                Ok(out) => out.into_iter().next().unwrap_or_default(),
+                Err(e) => {
+                    eprintln!("[STT] rubato resample error: {e} — falling back to raw audio");
+                    mono
+                }
+            }
+        }
+        Err(e) => {
+            eprintln!("[STT] rubato init error: {e} — falling back to raw audio");
+            mono
+        }
     }
-    out
 }
 
 fn clean_transcript(text: &str) -> String {
@@ -129,18 +145,12 @@ pub async fn run_stt_loop(
                 // Silence gap — require at least 0.4s of audio (avoids blank clips)
                 let min_samples = sample_rate as usize * 2 / 5; // 0.4 seconds
                 if buffer.len() >= min_samples {
-                    // Downmix stereo → mono (ASR models are trained on mono).
-                    // Keep native sample rate — Parakeet resamples internally.
-                    let mono = if channels > 1 {
-                        let ch = channels as usize;
-                        buffer.chunks(ch)
-                            .map(|frame| frame.iter().sum::<f32>() / ch as f32)
-                            .collect::<Vec<_>>()
-                    } else {
-                        buffer.clone()
-                    };
-                    let boosted = amplify(&mono, MIC_GAIN);
-                    match stt.transcribe(&boosted, sample_rate, 1).await {
+                    // Downmix to mono + resample to 16 kHz with rubato sinc resampler.
+                    // Sending the model exactly the rate it was trained on (16 kHz)
+                    // rather than relying on Parakeet's internal Python resampling.
+                    let prepared = prepare_for_stt(&buffer, sample_rate, channels);
+                    let boosted = amplify(&prepared, MIC_GAIN);
+                    match stt.transcribe(&boosted, crate::constants::STT_SAMPLE_RATE, 1).await {
                         Ok(text) => {
                             let cleaned = clean_transcript(&text);
                             if !cleaned.is_empty() {

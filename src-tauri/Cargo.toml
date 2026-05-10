@@ -37,6 +37,7 @@ cpal = "0.15"
 uuid = { version = "1", features = ["v4", "serde"] }
 regex = "1"
 sha2 = "0.10"
+rubato = "0.16"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 flate2 = "1"
 tar = "0.4"
