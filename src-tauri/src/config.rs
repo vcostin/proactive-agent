@@ -57,8 +57,8 @@ impl AppConfig {
             embed_port: 18081,
             stt_port: 5092,  // parakeet-server default port
             audio_device: None,
-            embed_model: "nomic-embed-text".to_string(),
-            embed_model_file: "nomic-embed-text-v1.5.Q8_0.gguf".to_string(),
+            embed_model: crate::constants::EMBED_MODEL_ALIAS.to_string(),
+            embed_model_file: crate::constants::EMBED_MODEL_FILE.to_string(),
             persona_prompt: concat!(
                 "You are a helpful, proactive assistant with persistent memory. ",
                 "You remember facts about the user across conversations. ",
@@ -111,6 +111,6 @@ impl AppConfig {
     }
 
     pub fn stt_model_ready() -> bool {
-        Self::stt_model_dir().join("parakeet-tdt-0.6b-v3.onnx").exists()
+        Self::stt_model_dir().join(crate::constants::STT_MODEL_FILE).exists()
     }
 }

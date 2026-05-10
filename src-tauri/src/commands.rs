@@ -133,27 +133,14 @@ pub async fn download_required_models(
     // Parakeet model files go into binaries/parakeet/models/
     let stt_model_dir = crate::config::AppConfig::stt_model_dir();
     std::fs::create_dir_all(&stt_model_dir).map_err(to_cmd_err)?;
-    let parakeet_onnx   = stt_model_dir.join("parakeet-tdt-0.6b-v3.onnx");
-    let parakeet_tokens = stt_model_dir.join("parakeet-tdt-0.6b-v3-tokens.txt");
+    use crate::constants::*;
+    let parakeet_onnx   = stt_model_dir.join(STT_MODEL_FILE);
+    let parakeet_tokens = stt_model_dir.join(STT_TOKENS_FILE);
 
-    // TODO: verify exact Hugging Face URLs before release
-    // Model source: groxaxo/parakeet-tdt-0.6b-v3-fastapi-openai (ONNX INT8 export)
     let downloads: &[(&str, &str, &std::path::Path)] = &[
-        (
-            "nomic-embed-text-v1.5.Q8_0.gguf",
-            "https://huggingface.co/nomic-ai/nomic-embed-text-v1.5-GGUF/resolve/main/nomic-embed-text-v1.5.Q8_0.gguf",
-            &embed_path,
-        ),
-        (
-            "parakeet-tdt-0.6b-v3.onnx",
-            "https://huggingface.co/groxaxo/parakeet-tdt-0.6b-v3-fastapi-openai/resolve/main/parakeet-tdt-0.6b-v3.onnx",
-            &parakeet_onnx,
-        ),
-        (
-            "parakeet-tdt-0.6b-v3-tokens.txt",
-            "https://huggingface.co/groxaxo/parakeet-tdt-0.6b-v3-fastapi-openai/resolve/main/parakeet-tdt-0.6b-v3-tokens.txt",
-            &parakeet_tokens,
-        ),
+        (EMBED_MODEL_FILE, EMBED_MODEL_URL, &embed_path),
+        (STT_MODEL_FILE,   STT_MODEL_URL,   &parakeet_onnx),
+        (STT_TOKENS_FILE,  STT_TOKENS_URL,  &parakeet_tokens),
     ];
 
     let client = reqwest::Client::new();
@@ -409,7 +396,7 @@ async fn test_llama_binary() -> (bool, String) {
 /// Emits `download_progress` events during download.
 #[tauri::command]
 pub async fn install_vcredist(app_handle: tauri::AppHandle) -> CmdResult<()> {
-    let url = "https://aka.ms/vs/17/release/vc_redist.x64.exe";
+    let url = crate::constants::VCREDIST_URL;
     let dest = std::env::temp_dir().join("vc_redist.x64.exe");
 
     // Download
@@ -435,16 +422,12 @@ pub async fn install_vcredist(app_handle: tauri::AppHandle) -> CmdResult<()> {
 
     // Security: verify SHA256 before executing the downloaded binary.
     // Pin to a specific VCRedist version + hash rather than blindly running whatever aka.ms serves.
-    // Hash = SHA256 of vc_redist.x64.exe for VS 2022 17.10 (14.40.33816).
-    // Source: https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist
-    // TODO: update URL and hash here when pinning to a newer version.
-    const VCREDIST_SHA256: &str =
-        "c760c594b9f5e8cb76be9bba6e4a38b0dd13e3bd5a8cf4d05d4e7a4b5e1b2c3d4"; // placeholder — replace before shipping
+    // Hash + URL are in constants.rs — update both together when pinning a new version.
     let file_bytes = tokio::fs::read(&dest).await.map_err(to_cmd_err)?;
-    if !verify_sha256(&file_bytes, VCREDIST_SHA256) {
+    if !verify_sha256(&file_bytes, crate::constants::VCREDIST_SHA256) {
         let _ = tokio::fs::remove_file(&dest).await;
-        return Err("VCRedist integrity check failed — file removed for safety. \
-                    Retry or install manually from aka.ms/vs/17/release/vc_redist.x64.exe".to_string());
+        return Err(format!("VCRedist integrity check failed — file removed for safety. \
+                    Retry or install manually from {}", crate::constants::VCREDIST_URL));
     }
 
     // Silent install
