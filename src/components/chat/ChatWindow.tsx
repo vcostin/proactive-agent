@@ -35,6 +35,7 @@ export function ChatWindow({ modelName, onModelClick }: Props) {
     }
   }, [listening]);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const mountedRef = useRef(false);
 
   const handleProactive = useCallback(
     (msg: DeferredMessage) => addProactive(msg.message),
@@ -42,9 +43,17 @@ export function ChatWindow({ modelName, onModelClick }: Props) {
   );
   useProactiveEvents(handleProactive);
 
-  // Scroll to bottom on new messages
+  // Scroll to bottom on messages change.
+  // First render (history loaded from localStorage): instant — no animation.
+  // Subsequent messages during conversation: smooth.
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+    if (!mountedRef.current) {
+      // Initial load — jump immediately, no animation
+      bottomRef.current?.scrollIntoView({ behavior: 'instant' as ScrollBehavior });
+      mountedRef.current = true;
+    } else {
+      bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
   }, [messages]);
 
   const handleSend = () => {
@@ -125,15 +134,42 @@ export function ChatWindow({ modelName, onModelClick }: Props) {
         </button>
       </div>
 
+      {/* ── Model loading banner ── */}
+      {!llamaReady && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 10,
+          padding: '8px 16px',
+          background: 'rgba(100, 160, 255, 0.06)',
+          borderBottom: '1px solid var(--border)',
+          fontSize: 12, color: 'var(--text-muted)',
+          flexShrink: 0,
+        }}>
+          <span style={{
+            width: 7, height: 7, borderRadius: '50%',
+            background: 'var(--accent)',
+            boxShadow: '0 0 6px var(--accent)',
+            animation: 'blink 1.2s ease-in-out infinite',
+            flexShrink: 0,
+          }} />
+          Loading model — you can type, your message will send when ready
+        </div>
+      )}
+
       {/* ── Message list ── */}
       <div style={{
         flex: 1, overflowY: 'auto', padding: '14px 16px',
         display: 'flex', flexDirection: 'column', gap: 10,
       }}>
-        {messages.length === 0 && (
+        {messages.length === 0 && llamaReady && (
           <div style={{ margin: 'auto', opacity: 0.3, textAlign: 'center', lineHeight: 2 }}>
             proactive-agent<br />
             <span style={{ fontSize: 11 }}>send a message to begin</span>
+          </div>
+        )}
+        {messages.length === 0 && !llamaReady && (
+          <div style={{ margin: 'auto', opacity: 0.2, textAlign: 'center', lineHeight: 2 }}>
+            proactive-agent<br />
+            <span style={{ fontSize: 11 }}>model loading…</span>
           </div>
         )}
 
