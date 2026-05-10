@@ -253,7 +253,10 @@ pub async fn start_voice_input(
                 Ok(capture) => {
                     let sr = capture.sample_rate;
                     let ch = capture.channels;
-                    debug_event_sync(&app_for_thread, format!("capture started: {sr} Hz, {ch} ch"));
+                    debug_event_sync(&app_for_thread, format!(
+                        "capture started: {sr} Hz, {ch} ch — device: {}",
+                        capture.device_name
+                    ));
                     // Send actual device config so STT loop uses the correct sample rate
                     let _ = cfg_tx.send((sr, ch));
                     while !stop_clone.load(Ordering::Relaxed) {

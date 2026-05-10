@@ -67,7 +67,7 @@ fn prepare_for_stt(samples: &[f32], device_rate: u32, channels: u16) -> (Vec<f32
         1,      // mono
     ) {
         Ok(r) => r,
-        Err(e) => return (mono, false),
+        Err(_e) => return (mono, false),
     };
 
     match resampler.process(&[mono.clone()], None) {
@@ -138,13 +138,26 @@ pub async fn run_stt_loop(
 
     let stt = SttClient::new(stt_port);
     let mut buffer: Vec<f32> = Vec::new();
+    let mut frames_received: u64 = 0;
+    let mut last_frame_log = std::time::Instant::now();
 
     loop {
         match tokio::time::timeout(
             std::time::Duration::from_millis(SILENCE_MS),
             audio_rx.recv(),
         ).await {
-            Ok(Some(frame)) => buffer.extend_from_slice(&frame),
+            Ok(Some(frame)) => {
+                frames_received += 1;
+                buffer.extend_from_slice(&frame);
+                // Log frame activity every 5 seconds so we can confirm VAD is triggering
+                if last_frame_log.elapsed().as_secs() >= 5 {
+                    debug_event(&app_handle, format!(
+                        "VAD active — {frames_received} frames received ({} samples buffered)",
+                        buffer.len()
+                    ));
+                    last_frame_log = std::time::Instant::now();
+                }
+            }
             Ok(None) => break, // channel closed — voice stopped
             Err(_) => {
                 // Silence gap — require at least 0.4s of audio
@@ -152,7 +165,7 @@ pub async fn run_stt_loop(
                 if buffer.len() >= min_samples {
                     // Run CPU-bound rubato resampling off the tokio executor thread
                     let buf = buffer.clone();
-                    let app = app_handle.clone();
+                    let _app = app_handle.clone();
                     let (prepared, resampled_ok) = tokio::task::spawn_blocking(
                         move || prepare_for_stt(&buf, sample_rate, channels)
                     ).await.unwrap_or_else(|_| (buffer.clone(), false));
