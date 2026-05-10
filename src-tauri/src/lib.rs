@@ -1,10 +1,14 @@
 mod audio;
 pub mod binary_store;
 mod commands;
+pub mod constants;
 mod config;
 mod memory;
 mod monitor;
 mod orchestrator;
+
+/// Re-export for ergonomic use across all sibling modules.
+pub use constants::SIDECAR_HOST;
 
 use config::AppConfig;
 use monitor::{new_event_log, run_monitor_loop, SharedEventLog};
@@ -68,7 +72,7 @@ pub fn run() {
             let handle_deps = app_handle.clone();
             tauri::async_runtime::spawn(async move {
                 // Small delay so the UI is ready to receive the event
-                tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+                tokio::time::sleep(std::time::Duration::from_millis(constants::DEPS_CHECK_STARTUP_DELAY_MS)).await;
                 if let Ok(deps) = commands::check_system_deps().await {
                     let _ = handle_deps.emit("system_deps_checked", &deps);
                 }
@@ -104,8 +108,8 @@ pub fn run() {
             let orch_distill = orchestrator.clone();
             let log_distill = event_log.clone();
             tauri::async_runtime::spawn(async move {
-                tokio::time::sleep(std::time::Duration::from_secs(60)).await; // wait for init
-                let mut interval = tokio::time::interval(std::time::Duration::from_secs(600));
+                tokio::time::sleep(std::time::Duration::from_secs(constants::DISTILLATION_STARTUP_DELAY_SECS)).await;
+                let mut interval = tokio::time::interval(std::time::Duration::from_secs(constants::DISTILLATION_INTERVAL_SECS));
                 loop {
                     interval.tick().await;
                     let mut lock = orch_distill.lock().await;
@@ -343,7 +347,7 @@ pub fn start_chat_server(
                 let _ = old.kill().await;
             }
         }
-        tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+        tokio::time::sleep(std::time::Duration::from_millis(constants::CHAT_SERVER_RESTART_DELAY_MS)).await;
 
         let binary = match find_sidecar("llama-server") {
             Some(b) => b,
@@ -363,7 +367,7 @@ pub fn start_chat_server(
         let spawn_result = make_cmd(&binary, &dll_dir)
             .args(["--model", &model_path,
                    "--port", &port.to_string(),
-                   "--host", "127.0.0.1",
+                   "--host", SIDECAR_HOST,
                    "--ctx-size", "4096",
                    "-ngl", "999",
                    "--alias", "llama-chat"])
@@ -424,7 +428,7 @@ fn spawn_sidecars(config: SharedConfig, event_log: SharedEventLog, chat_child: S
         spawn_direct("llama-server", "llama (embed)",
             vec!["--model".into(), embed_path,
                  "--port".into(), embed_port.to_string(),
-                 "--host".into(), "127.0.0.1".into(),
+                 "--host".into(), SIDECAR_HOST.into(),
                  "--ctx-size".into(), "512".into(),
                  "-ngl".into(), "999".into(),
                  "--embedding".into(),
@@ -437,7 +441,7 @@ fn spawn_sidecars(config: SharedConfig, event_log: SharedEventLog, chat_child: S
             event_log.clone(), pids.clone());
 
         // TTS uses Piper as a subprocess per request — no persistent server needed.
-        let tts_model = cfg_models_dir.join("tts").join("en_US-lessac-medium.onnx");
+        let tts_model = cfg_models_dir.join("tts").join(constants::TTS_MODEL_FILE);
         if tts_model.exists() {
             monitor::push_event(&event_log, "[ADAPTER]", "TTS (Piper) ready — subprocess mode");
         } else {

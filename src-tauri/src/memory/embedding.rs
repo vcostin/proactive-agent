@@ -35,7 +35,7 @@ impl EmbeddingService {
     pub fn new(port: u16) -> Self {
         Self {
             client: Client::new(),
-            base_url: format!("http://127.0.0.1:{port}"),
+            base_url: format!("http://{}:{port}", crate::SIDECAR_HOST),
             last_latency_ms: Arc::new(AtomicU64::new(0)),
         }
     }
@@ -45,7 +45,7 @@ impl EmbeddingService {
     pub async fn embed(&self, text: &str) -> Result<Vec<f32>> {
         let start = std::time::Instant::now();
 
-        let req = EmbedRequest { input: text, model: "nomic-embed-text" };
+        let req = EmbedRequest { input: text, model: crate::constants::EMBED_MODEL_ALIAS };
         let resp: EmbedResponse = self
             .client
             .post(format!("{}/v1/embeddings", self.base_url))

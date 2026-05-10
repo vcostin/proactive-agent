@@ -82,6 +82,7 @@ Run this checklist against every diff or file the Worker produces. Be explicit a
 - [ ] New Tauri command added without a corresponding TypeScript type (until `tauri-specta` is adopted, at minimum document the shape)
 - [ ] WAV sample rate assumed rather than read from header
 - [ ] Mono PCM fed directly into stereo cpal buffer without upmix
+- [ ] Literal URL, hostname, model filename, or magic timeout/size value introduced outside `constants.rs` — all such values must be named constants
 
 ### Yellow flags — flag and require explanation before proceeding
 

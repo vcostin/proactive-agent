@@ -227,7 +227,7 @@ impl SidecarState {
 
 /// Poll a single sidecar and return its state + http status code.
 async fn poll_sidecar(client: &Client, port: u16) -> (SidecarState, u16, u64) {
-    let url = format!("http://127.0.0.1:{port}/health");
+    let url = format!("http://{}:{port}/health", crate::SIDECAR_HOST);
     let start = std::time::Instant::now();
     match client.get(&url).send().await {
         Ok(r) => {

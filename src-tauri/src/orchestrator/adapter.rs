@@ -50,7 +50,7 @@ impl LlamaCppAdapter {
     pub fn new(port: u16, fallback_alias: impl Into<String>) -> Self {
         Self {
             client: Client::new(),
-            base_url: format!("http://127.0.0.1:{port}"),
+            base_url: format!("http://{}:{port}", crate::SIDECAR_HOST),
             fallback_alias: fallback_alias.into(),
             discovered_id: Arc::new(RwLock::new(None)),
         }

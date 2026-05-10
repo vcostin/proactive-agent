@@ -87,11 +87,11 @@ fn find_tts_model() -> Result<std::path::PathBuf> {
     // In dev: models/tts/ next to project root; in release: relative to exe
     let candidates = [
         crate::binaries_dir().parent()
-            .map(|p| p.join("models").join("tts").join("en_US-lessac-medium.onnx"))
+            .map(|p| p.join("models").join("tts").join(crate::constants::TTS_MODEL_FILE))
             .unwrap_or_default(),
         crate::binaries_dir()
             .parent().and_then(|p| p.parent())
-            .map(|p| p.join("models").join("tts").join("en_US-lessac-medium.onnx"))
+            .map(|p| p.join("models").join("tts").join(crate::constants::TTS_MODEL_FILE))
             .unwrap_or_default(),
     ];
     candidates.into_iter()
