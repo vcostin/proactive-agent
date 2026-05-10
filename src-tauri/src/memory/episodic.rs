@@ -19,21 +19,53 @@ use super::embedding::EMBED_DIM;
 
 const TABLE_NAME: &str = "episodic";
 
+/// Conversation participant — never omit this field.
+/// Stored as "user" / "assistant" in LanceDB (Utf8), parsed back on retrieval.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Role {
+    User,
+    Assistant,
+}
+
+impl Role {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Role::User => "user",
+            Role::Assistant => "assistant",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "user" => Role::User,
+            _ => Role::Assistant,
+        }
+    }
+}
+
+impl std::fmt::Display for Role {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// A conversation turn before processing — the raw input to the store.
 #[derive(Debug, Clone)]
 pub struct RawTurn {
     pub session_id: String,
-    pub role: String,
+    pub role: Role,
     pub content: String,
     pub importance_score: f32,
 }
 
 /// A processed turn as stored in LanceDB.
+/// `role` is serialised as a string in the Arrow schema but typed here.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EpisodicEntry {
     pub id: String,
     pub session_id: String,
-    pub role: String,
+    pub role: String,   // "user" | "assistant" — kept as String for Arrow compat
     pub content: String,
     pub timestamp: String,
     pub importance_score: f32,
@@ -64,7 +96,7 @@ impl EpisodicStore {
         let entry = EpisodicEntry {
             id: Uuid::new_v4().to_string(),
             session_id: turn.session_id,
-            role: turn.role,
+            role: turn.role.as_str().to_string(),
             content: turn.content,
             timestamp: Utc::now().to_rfc3339(),
             importance_score: turn.importance_score,
