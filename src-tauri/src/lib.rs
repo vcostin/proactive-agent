@@ -215,6 +215,11 @@ fn kill_all_sidecars(app_handle: &tauri::AppHandle) {
 
 // ── Process helpers ───────────────────────────────────────────────────────────
 
+/// In dev: project_root/binaries/ — populated by `npm run setup`.
+/// In release: %APPDATA%\com.proactive.agent\binaries\ (user-writable).
+///   The wizard downloads llama-server and piper here at first run.
+///   Parakeet is bundled by the installer and found via find_sidecar's
+///   exe-directory fallback, not through binaries_dir().
 pub fn binaries_dir() -> PathBuf {
     #[cfg(debug_assertions)]
     {
@@ -226,14 +231,31 @@ pub fn binaries_dir() -> PathBuf {
         };
         return root.join("binaries");
     }
-    // Release: Tauri bundles externalBin alongside the main exe
+    // Release: wizard-downloaded binaries live in AppData (user-writable,
+    // no admin rights needed unlike Program Files).
     #[allow(unreachable_code)]
-    std::env::current_exe()
-        .unwrap_or_default()
-        .parent()
-        .map(|p| p.join("binaries"))
-        .unwrap_or_else(|| PathBuf::from("binaries"))
+    release_binaries_dir()
 }
+
+/// Platform-specific AppData path for release binaries.
+/// Mirrors the path Tauri uses for its own app data (same identifier).
+#[cfg(not(debug_assertions))]
+fn release_binaries_dir() -> PathBuf {
+    #[cfg(target_os = "windows")]
+    let base = std::env::var("APPDATA").map(PathBuf::from).unwrap_or_default();
+    #[cfg(target_os = "macos")]
+    let base = std::env::var("HOME")
+        .map(|h| PathBuf::from(h).join("Library/Application Support"))
+        .unwrap_or_default();
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    let base = std::env::var("HOME")
+        .map(|h| PathBuf::from(h).join(".local/share"))
+        .unwrap_or_default();
+    base.join("com.proactive.agent").join("binaries")
+}
+
+#[cfg(debug_assertions)]
+fn release_binaries_dir() -> PathBuf { unreachable!() }
 
 pub fn sidecar_filename(name: &str) -> String {
     #[cfg(target_os = "windows")]
@@ -247,25 +269,40 @@ pub fn sidecar_filename(name: &str) -> String {
     return format!("{name}-x86_64-unknown-linux-gnu");
 }
 
-/// Locate a sidecar binary. Checks an isolated subdirectory first so each
-/// sidecar has its own DLLs and can't be contaminated by another sidecar's
-/// older/newer versions of shared libraries like ggml.dll.
+/// Locate a sidecar binary.
 ///
-/// Search order:
-///   1. binaries/{name}/{name}-{target}.exe   ← isolated (preferred)
-///   2. binaries/{name}-{target}.exe          ← legacy flat layout
+/// Search order (dev):
+///   1. binaries/{short}/{filename}  ← npm run setup layout
+///   2. binaries/{filename}          ← legacy flat
+///
+/// Search order (release):
+///   1. AppData/com.proactive.agent/binaries/{short}/{filename}  ← wizard-downloaded
+///   2. AppData/.../binaries/{filename}
+///   3. {exe_dir}/{short}/{filename}  ← installer-bundled (e.g. parakeet)
+///   4. {exe_dir}/{filename}
 pub fn find_sidecar(name: &str) -> Option<PathBuf> {
     let filename = sidecar_filename(name);
     let root = binaries_dir();
-    // The short name is the first segment: "llama-server" → "llama", "parakeet-server" → "parakeet"
     let short = name.split('-').next().unwrap_or(name);
-    [
-        root.join(name).join(&filename),    // binaries/llama-server/llama-server-...exe
-        root.join(short).join(&filename),   // binaries/llama/llama-server-...exe  ← current layout
-        root.join(&filename),               // binaries/llama-server-...exe  (legacy)
-    ]
-    .into_iter()
-    .find(|p| p.exists() && p.metadata().map(|m| m.len() > 1024).unwrap_or(false))
+
+    let mut candidates = vec![
+        root.join(short).join(&filename),
+        root.join(name).join(&filename),
+        root.join(&filename),
+    ];
+
+    // Release: also check exe directory for installer-bundled binaries (parakeet)
+    #[cfg(not(debug_assertions))]
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            candidates.push(exe_dir.join(short).join(&filename));
+            candidates.push(exe_dir.join(name).join(&filename));
+            candidates.push(exe_dir.join(&filename));
+        }
+    }
+
+    candidates.into_iter()
+        .find(|p| p.exists() && p.metadata().map(|m| m.len() > 1024).unwrap_or(false))
 }
 
 /// Build a tokio::process::Command that prioritises our bundled DLLs on Windows.
