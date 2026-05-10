@@ -1,6 +1,6 @@
 # Proactive Agent — Roadmap
 
-**Current state:** Chat, streaming, memory, voice input (STT), voice output (TTS), debug panel all working.
+**Current state:** Chat, streaming, memory, voice input (STT), voice output (TTS), debug panel all working. Wizard downloads llama+piper on first run. Rubato sinc resampling in STT pipeline.
 
 ---
 
@@ -31,6 +31,29 @@
 | Kokoro/whisper cleanup | All dead code, binaries (~21 MB), scripts, and 2.1 GB Whisper models removed |
 | Production build | MSI (96 MB) + NSIS (74 MB) installers, DLLs bundled alongside sidecars |
 | Unit tests (TTS) | 13 tests: `wav_to_f32`, `resample`, `clean_for_speech` — run via `cargo test` |
+| Wizard binary downloads | llama-server + piper downloaded by wizard on first run, AppData location |
+| Rubato STT resampling | `SincFixedIn` 48kHz→16kHz, spawn_blocking, device-rate-aware |
+| Constants consolidation | `constants.rs` — all URLs, filenames, timeouts in one place |
+| Sidecar health polish | Amber "loading model" state, 2-poll debounce, no more online/offline flicker |
+| Episodic role labels | `User:`/`Assistant:` prefix in retrieved memories, typed `Role` enum |
+| Security hardening | CSP, removed shell permissions, path validation, input limits |
+
+---
+
+## 🧹 Pending cleanup & improvements
+
+Small items that don't need a decision — just time.
+
+| Item | Notes |
+|------|-------|
+| VCRedist SHA256 placeholder | Replace `c760c594...` in `constants.rs` with real hash before shipping |
+| `ggml-cpu-*.dll` not in installer | GPU works (Vulkan), CPU fallback uses slow reference kernels |
+| `libomp140.x86_64.dll` not in installer | OpenMP parallelism for llama-server |
+| STT VAD diagnostic logs | `VAD active — N frames` every 5s — useful for debugging, could be debug-only |
+| `capture error` still `eprintln!` | Should route to debug event log like other audio errors |
+| Linear interpolation in TTS resampler | Works, but could be upgraded to rubato for consistency |
+| `tauri-specta` typed IPC bindings | Type-safe invoke/event at the frontend/Rust boundary |
+| Vitest frontend component tests | `useChat`, `SchedulerPanel` — low priority while UI is prototype |
 
 ---
 
