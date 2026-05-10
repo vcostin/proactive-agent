@@ -6,6 +6,11 @@ mod memory;
 mod monitor;
 mod orchestrator;
 
+/// Loopback address used for all sidecar HTTP servers.
+/// Explicitly IPv4 — "localhost" can resolve to ::1 (IPv6) on some systems,
+/// which would fail to connect to servers bound with --host 127.0.0.1.
+pub const SIDECAR_HOST: &str = "127.0.0.1";
+
 use config::AppConfig;
 use monitor::{new_event_log, run_monitor_loop, SharedEventLog};
 use orchestrator::{scheduler::ProactivityScheduler, Orchestrator};
@@ -363,7 +368,7 @@ pub fn start_chat_server(
         let spawn_result = make_cmd(&binary, &dll_dir)
             .args(["--model", &model_path,
                    "--port", &port.to_string(),
-                   "--host", "127.0.0.1",
+                   "--host", SIDECAR_HOST,
                    "--ctx-size", "4096",
                    "-ngl", "999",
                    "--alias", "llama-chat"])
@@ -424,7 +429,7 @@ fn spawn_sidecars(config: SharedConfig, event_log: SharedEventLog, chat_child: S
         spawn_direct("llama-server", "llama (embed)",
             vec!["--model".into(), embed_path,
                  "--port".into(), embed_port.to_string(),
-                 "--host".into(), "127.0.0.1".into(),
+                 "--host".into(), SIDECAR_HOST.into(),
                  "--ctx-size".into(), "512".into(),
                  "-ngl".into(), "999".into(),
                  "--embedding".into(),

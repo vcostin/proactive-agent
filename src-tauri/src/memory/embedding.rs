@@ -35,7 +35,7 @@ impl EmbeddingService {
     pub fn new(port: u16) -> Self {
         Self {
             client: Client::new(),
-            base_url: format!("http://127.0.0.1:{port}"),
+            base_url: format!("http://{}:{port}", crate::SIDECAR_HOST),
             last_latency_ms: Arc::new(AtomicU64::new(0)),
         }
     }

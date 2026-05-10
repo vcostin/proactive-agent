@@ -43,7 +43,7 @@ impl SttClient {
 
         let resp: TranscriptResponse = self
             .client
-            .post(format!("http://127.0.0.1:{}/v1/audio/transcriptions", self.port))
+            .post(format!("http://{}:{}/v1/audio/transcriptions", crate::SIDECAR_HOST, self.port))
             .multipart(form)
             .send()
             .await?
