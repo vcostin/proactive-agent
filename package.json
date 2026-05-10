@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "pwsh -File scripts/ensure-binary-stubs.ps1 && vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
