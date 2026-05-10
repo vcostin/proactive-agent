@@ -98,7 +98,17 @@ impl Orchestrator {
 
         // 3. Assemble context
         let semantic_facts: Vec<String> = semantic.iter().map(|f| f.fact.clone()).collect();
-        let episodic_texts: Vec<String> = episodic.iter().map(|e| e.content.clone()).collect();
+        // Prefix each episodic entry with its role so the LLM always knows
+        // whether a retrieved memory snippet was said by the user or itself.
+        // Prevents role-blurring when past assistant turns are retrieved.
+        let episodic_texts: Vec<String> = episodic.iter().map(|e| {
+            let label = match e.role.as_str() {
+                "user" => "User",
+                "assistant" => "Assistant",
+                other => other,
+            };
+            format!("{label}: {}", e.content)
+        }).collect();
 
         let recent: Vec<Turn> = self
             .recent_turns
@@ -147,12 +157,13 @@ impl Orchestrator {
         let (clean, deferred) = parse_defer(&response.content);
 
         // 6. Store both turns — best-effort, skipped when embed server is unavailable
+        use crate::memory::episodic::{RawTurn, Role};
         if let Ok(user_embed) = self.memory.embedding.embed(&user_input).await {
             let importance = importance_heuristic(&user_input);
             let _ = self.memory.episodic.store(
-                crate::memory::episodic::RawTurn {
+                RawTurn {
                     session_id: self.session_id.clone(),
-                    role: "user".to_string(),
+                    role: Role::User,
                     content: user_input.clone(),
                     importance_score: importance,
                 },
@@ -161,9 +172,9 @@ impl Orchestrator {
         }
         if let Ok(asst_embed) = self.memory.embedding.embed(&clean).await {
             let _ = self.memory.episodic.store(
-                crate::memory::episodic::RawTurn {
+                RawTurn {
                     session_id: self.session_id.clone(),
-                    role: "assistant".to_string(),
+                    role: Role::Assistant,
                     content: clean.clone(),
                     importance_score: 0.7,
                 },
