@@ -28,11 +28,11 @@ fn amplify(samples: &[f32], _gain: f32) -> Vec<f32> {
 }
 
 /// Downmix stereo→mono then resample to STT_SAMPLE_RATE (16 kHz) using
-/// rubato's FFT-based sinc resampler — high quality, handles any device rate.
-/// The ratio is computed from the actual cpal device rate, so this works
-/// correctly for 44100, 48000, 96000 Hz or anything else a mic might report.
-fn prepare_for_stt(samples: &[f32], device_rate: u32, channels: u16) -> Vec<f32> {
-    use rubato::{FftFixedIn, Resampler};
+/// rubato's sinc resampler — high quality, handles any device rate.
+/// Returns (resampled_audio, true) on success or (raw_mono, false) on error.
+fn prepare_for_stt(samples: &[f32], device_rate: u32, channels: u16) -> (Vec<f32>, bool) {
+    use rubato::{SincFixedIn, SincInterpolationParameters, SincInterpolationType,
+                  WindowFunction, Resampler};
     use crate::constants::STT_SAMPLE_RATE;
 
     // Step 1: downmix to mono
@@ -47,32 +47,32 @@ fn prepare_for_stt(samples: &[f32], device_rate: u32, channels: u16) -> Vec<f32>
 
     // Step 2: resample to 16 kHz (no-op if device already runs at that rate)
     if device_rate == STT_SAMPLE_RATE || mono.is_empty() {
-        return mono;
+        return (mono, true);
     }
 
-    let chunk_size = mono.len();
-    let resampler = FftFixedIn::<f32>::new(
-        device_rate as usize,
-        STT_SAMPLE_RATE as usize,
-        chunk_size,
-        2,   // sub-chunks — 2 balances quality vs memory
-        1,   // channels (mono at this point)
-    );
+    let params = SincInterpolationParameters {
+        sinc_len: 64,
+        f_cutoff: 0.95,
+        interpolation: SincInterpolationType::Linear,
+        oversampling_factor: 64,
+        window: WindowFunction::BlackmanHarris2,
+    };
 
-    match resampler {
-        Ok(mut r) => {
-            match r.process(&[mono.clone()], None) {
-                Ok(out) => out.into_iter().next().unwrap_or_default(),
-                Err(e) => {
-                    eprintln!("[STT] rubato resample error: {e} — falling back to raw audio");
-                    mono
-                }
-            }
-        }
-        Err(e) => {
-            eprintln!("[STT] rubato init error: {e} — falling back to raw audio");
-            mono
-        }
+    let ratio = STT_SAMPLE_RATE as f64 / device_rate as f64;
+    let mut resampler = match SincFixedIn::<f32>::new(
+        ratio,
+        2.0,    // max_relative_ratio
+        params,
+        mono.len(),
+        1,      // mono
+    ) {
+        Ok(r) => r,
+        Err(e) => return (mono, false),
+    };
+
+    match resampler.process(&[mono.clone()], None) {
+        Ok(out) => (out.into_iter().next().unwrap_or_default(), true),
+        Err(_e) => (mono, false),
     }
 }
 
@@ -131,6 +131,11 @@ pub async fn run_stt_loop(
     channels: u16,
     app_handle: tauri::AppHandle,
 ) {
+    debug_event(&app_handle, format!(
+        "STT loop started — device: {sample_rate} Hz {channels}ch → target: {} Hz mono",
+        crate::constants::STT_SAMPLE_RATE
+    ));
+
     let stt = SttClient::new(stt_port);
     let mut buffer: Vec<f32> = Vec::new();
 
@@ -140,28 +145,56 @@ pub async fn run_stt_loop(
             audio_rx.recv(),
         ).await {
             Ok(Some(frame)) => buffer.extend_from_slice(&frame),
-            Ok(None) => break, // channel closed
+            Ok(None) => break, // channel closed — voice stopped
             Err(_) => {
-                // Silence gap — require at least 0.4s of audio (avoids blank clips)
-                let min_samples = sample_rate as usize * 2 / 5; // 0.4 seconds
+                // Silence gap — require at least 0.4s of audio
+                let min_samples = sample_rate as usize * 2 / 5;
                 if buffer.len() >= min_samples {
-                    // Downmix to mono + resample to 16 kHz with rubato sinc resampler.
-                    // Sending the model exactly the rate it was trained on (16 kHz)
-                    // rather than relying on Parakeet's internal Python resampling.
-                    let prepared = prepare_for_stt(&buffer, sample_rate, channels);
+                    // Run CPU-bound rubato resampling off the tokio executor thread
+                    let buf = buffer.clone();
+                    let app = app_handle.clone();
+                    let (prepared, resampled_ok) = tokio::task::spawn_blocking(
+                        move || prepare_for_stt(&buf, sample_rate, channels)
+                    ).await.unwrap_or_else(|_| (buffer.clone(), false));
+
+                    if !resampled_ok {
+                        debug_event(&app_handle, format!(
+                            "rubato failed for {sample_rate}→{} Hz — falling back to native rate",
+                            crate::constants::STT_SAMPLE_RATE
+                        ));
+                    }
+
+                    let out_rate = if resampled_ok {
+                        crate::constants::STT_SAMPLE_RATE
+                    } else {
+                        sample_rate
+                    };
+
                     let boosted = amplify(&prepared, MIC_GAIN);
-                    match stt.transcribe(&boosted, crate::constants::STT_SAMPLE_RATE, 1).await {
+                    match stt.transcribe(&boosted, out_rate, 1).await {
                         Ok(text) => {
                             let cleaned = clean_transcript(&text);
                             if !cleaned.is_empty() {
                                 let _ = app_handle.emit("voice_transcript", cleaned);
                             }
                         }
-                        Err(e) => eprintln!("[STT] transcribe error: {e}"),
+                        Err(e) => debug_event(&app_handle, format!("STT transcribe error: {e}")),
                     }
                     buffer.clear();
                 }
             }
         }
     }
+
+    debug_event(&app_handle, "STT loop exited".to_string());
+}
+
+/// Emit a debug event synchronously from async context.
+fn debug_event(app: &tauri::AppHandle, message: String) {
+    use tauri::Emitter;
+    let _ = app.emit("debug_event", crate::monitor::DebugEvent {
+        timestamp: chrono::Utc::now(),
+        component: "[AUDIO]".to_string(),
+        message,
+    });
 }
