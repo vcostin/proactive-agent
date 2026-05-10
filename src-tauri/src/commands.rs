@@ -347,7 +347,7 @@ pub async fn check_system_deps() -> CmdResult<SystemDeps> {
 async fn test_llama_binary() -> (bool, String) {
     let binary = match crate::find_sidecar("llama-server") {
         Some(b) => b,
-        None => return (false, "binary not found — run: npm run setup".to_string()),
+        None => return (false, "binary not found — use the Setup Wizard to download it".to_string()),
     };
     let dll_dir = binary.parent()
         .map(|p| p.to_path_buf())

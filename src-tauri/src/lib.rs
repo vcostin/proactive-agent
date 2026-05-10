@@ -285,21 +285,28 @@ pub fn find_sidecar(name: &str) -> Option<PathBuf> {
     let root = binaries_dir();
     let short = name.split('-').next().unwrap_or(name);
 
-    let mut candidates = vec![
+    // Release: also check exe directory for installer-bundled binaries (e.g. parakeet)
+    #[cfg(not(debug_assertions))]
+    let exe_candidates: Vec<PathBuf> = std::env::current_exe().ok()
+        .and_then(|exe| exe.parent().map(|d| d.to_path_buf()))
+        .map(|exe_dir| vec![
+            exe_dir.join(short).join(&filename),
+            exe_dir.join(name).join(&filename),
+            exe_dir.join(&filename),
+        ])
+        .unwrap_or_default();
+
+    #[cfg(debug_assertions)]
+    let exe_candidates: Vec<PathBuf> = vec![];
+
+    let candidates: Vec<PathBuf> = [
         root.join(short).join(&filename),
         root.join(name).join(&filename),
         root.join(&filename),
-    ];
-
-    // Release: also check exe directory for installer-bundled binaries (parakeet)
-    #[cfg(not(debug_assertions))]
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(exe_dir) = exe.parent() {
-            candidates.push(exe_dir.join(short).join(&filename));
-            candidates.push(exe_dir.join(name).join(&filename));
-            candidates.push(exe_dir.join(&filename));
-        }
-    }
+    ]
+    .into_iter()
+    .chain(exe_candidates)
+    .collect();
 
     candidates.into_iter()
         .find(|p| p.exists() && p.metadata().map(|m| m.len() > 1024).unwrap_or(false))
