@@ -1,7 +1,7 @@
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **proactive-ai** (921 symbols, 1555 relationships, 47 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **proactive-agent** (926 symbols, 1561 relationships, 47 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
 
@@ -24,10 +24,10 @@ This project is indexed by GitNexus as **proactive-ai** (921 symbols, 1555 relat
 
 | Resource | Use for |
 |----------|---------|
-| `gitnexus://repo/proactive-ai/context` | Codebase overview, check index freshness |
-| `gitnexus://repo/proactive-ai/clusters` | All functional areas |
-| `gitnexus://repo/proactive-ai/processes` | All execution flows |
-| `gitnexus://repo/proactive-ai/process/{name}` | Step-by-step execution trace |
+| `gitnexus://repo/proactive-agent/context` | Codebase overview, check index freshness |
+| `gitnexus://repo/proactive-agent/clusters` | All functional areas |
+| `gitnexus://repo/proactive-agent/processes` | All execution flows |
+| `gitnexus://repo/proactive-agent/process/{name}` | Step-by-step execution trace |
 
 ## CLI
 
