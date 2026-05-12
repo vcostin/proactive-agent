@@ -1,11 +1,7 @@
-/// binary_store.rs — Download and extract sidecar binaries from GitHub releases.
+/// binary_store.rs — Download and extract sidecar binaries.
 ///
-/// Each binary (llama-server, piper) has a known release pattern per OS/arch.
-/// The wizard calls `download_required_binaries()` on first run so the user
-/// never has to touch a terminal.
-///
-/// Parakeet is intentionally excluded — it has no public release URL and
-/// requires a manual PyInstaller build. That's tracked in ROADMAP § Needs Decision.
+/// All downloads use pinned URLs (see constants.rs) — no GitHub API calls,
+/// no rate limits. The wizard calls download_required_binaries() on first run.
 
 use anyhow::{bail, Context, Result};
 use futures::StreamExt;
@@ -19,46 +15,34 @@ use crate::commands::DownloadProgress;
 
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
 mod platform {
-    pub const TRIPLE:           &str = "x86_64-pc-windows-msvc";
-    pub const LLAMA_CPU_PAT:    &str = "bin-win-cpu-x64.zip";
-    pub const LLAMA_GPU_PAT:    Option<&str> = Some("bin-win-vulkan-x64.zip");
-    pub const PIPER_PAT:        &str = "piper_windows_amd64.zip";
-    pub const LLAMA_EXE:        &str = "llama-server.exe";
-    pub const PIPER_EXE:        &str = "piper.exe";
-    pub const PIPER_IS_TARGZ:   bool = false;
+    pub const TRIPLE:         &str = "x86_64-pc-windows-msvc";
+    pub const LLAMA_EXE:      &str = "llama-server.exe";
+    pub const PIPER_EXE:      &str = "piper.exe";
+    pub const PIPER_IS_TARGZ: bool = false;
 }
 
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 mod platform {
-    pub const TRIPLE:           &str = "aarch64-apple-darwin";
-    pub const LLAMA_CPU_PAT:    &str = "bin-macos-arm64.zip";
-    pub const LLAMA_GPU_PAT:    Option<&str> = None; // Metal built-in to llama
-    pub const PIPER_PAT:        &str = "piper_macos_aarch64.tar.gz";
-    pub const LLAMA_EXE:        &str = "llama-server";
-    pub const PIPER_EXE:        &str = "piper";
-    pub const PIPER_IS_TARGZ:   bool = true;
+    pub const TRIPLE:         &str = "aarch64-apple-darwin";
+    pub const LLAMA_EXE:      &str = "llama-server";
+    pub const PIPER_EXE:      &str = "piper";
+    pub const PIPER_IS_TARGZ: bool = true;
 }
 
 #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
 mod platform {
-    pub const TRIPLE:           &str = "x86_64-apple-darwin";
-    pub const LLAMA_CPU_PAT:    &str = "bin-macos-x64.zip";
-    pub const LLAMA_GPU_PAT:    Option<&str> = None;
-    pub const PIPER_PAT:        &str = "piper_macos_x86_64.tar.gz";
-    pub const LLAMA_EXE:        &str = "llama-server";
-    pub const PIPER_EXE:        &str = "piper";
-    pub const PIPER_IS_TARGZ:   bool = true;
+    pub const TRIPLE:         &str = "x86_64-apple-darwin";
+    pub const LLAMA_EXE:      &str = "llama-server";
+    pub const PIPER_EXE:      &str = "piper";
+    pub const PIPER_IS_TARGZ: bool = true;
 }
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 mod platform {
-    pub const TRIPLE:           &str = "x86_64-unknown-linux-gnu";
-    pub const LLAMA_CPU_PAT:    &str = "bin-ubuntu-x64.zip";
-    pub const LLAMA_GPU_PAT:    Option<&str> = None;
-    pub const PIPER_PAT:        &str = "piper_linux_x86_64.tar.gz";
-    pub const LLAMA_EXE:        &str = "llama-server";
-    pub const PIPER_EXE:        &str = "piper";
-    pub const PIPER_IS_TARGZ:   bool = true;
+    pub const TRIPLE:         &str = "x86_64-unknown-linux-gnu";
+    pub const LLAMA_EXE:      &str = "llama-server";
+    pub const PIPER_EXE:      &str = "piper";
+    pub const PIPER_IS_TARGZ: bool = true;
 }
 
 // ── Public status ─────────────────────────────────────────────────────────────
@@ -185,28 +169,7 @@ async fn download_piper(client: &Client, app: &tauri::AppHandle) -> Result<()> {
     Ok(())
 }
 
-// ── GitHub API ────────────────────────────────────────────────────────────────
-
-async fn github_latest(client: &Client, repo: &str) -> Result<serde_json::Value> {
-    let url = format!("https://api.github.com/repos/{repo}/releases/latest");
-    let resp = client.get(&url)
-        .send().await?
-        .error_for_status()?
-        .json::<serde_json::Value>().await?;
-    Ok(resp)
-}
-
-fn find_asset(release: &serde_json::Value, pattern: &str) -> Option<String> {
-    let assets = release["assets"].as_array()?;
-    assets.iter().find_map(|a| {
-        let name = a["name"].as_str()?;
-        if name.contains(pattern) {
-            a["browser_download_url"].as_str().map(str::to_owned)
-        } else {
-            None
-        }
-    })
-}
+// (GitHub API helpers removed — all downloads now use pinned URLs in constants.rs)
 
 // ── HTTP fetch with progress events ──────────────────────────────────────────
 
