@@ -5,32 +5,51 @@ not the original design. For decisions still open see `ROADMAP.md § Needs Decis
 
 ---
 
+## Hardware boundary decision (locked)
+
+```
+GPU (VRAM)  ──►  LLM inference only
+                 Reserved entirely for the chat model.
+                 Larger future models need headroom — nothing else competes for VRAM.
+
+CPU         ──►  Everything else:
+                 STT  — Parakeet ONNX via ort crate (in-process, no Python)
+                 TTS  — Piper subprocess
+                 Embeddings — nomic-embed-text via llama-server CPU path
+                 LanceDB — embedded, CPU/disk
+```
+
+This is a hard constraint. Do not route audio inference through the GPU even if it
+would be faster — the LLM needs the budget headroom for 14B, 32B and beyond.
+
+---
+
 ## System overview
 
 ```
-┌─────────────────────────────────────────────────────┐
-│                   Tauri 2 shell                     │
-│  ┌──────────────────────┐  ┌────────────────────┐  │
-│  │   React frontend     │  │   Rust backend     │  │
-│  │  (TypeScript + Vite) │  │   (tokio async)    │  │
-│  └──────────┬───────────┘  └─────────┬──────────┘  │
-│             │    invoke / event       │             │
-│             └────────────────────────┘             │
-└──────────────────────────┬──────────────────────────┘
-                           │ HTTP / subprocess / cpal
-          ┌────────────────┼────────────────┐
-          │                │                │
-   ┌──────▼──────┐  ┌──────▼──────┐  ┌────▼────────┐
-   │ llama-server│  │  parakeet   │  │    piper    │
-   │  :18080     │  │  STT :5092  │  │ subprocess  │
-   │  :18081     │  │             │  │             │
-   │ (chat+embed)│  │             │  │             │
-   └─────────────┘  └─────────────┘  └─────────────┘
-          │
-   ┌──────▼──────┐
-   │  LanceDB    │
-   │  (embedded) │
-   └─────────────┘
+┌─────────────────────────────────────────────────────────┐
+│                     Tauri 2 shell                       │
+│  ┌──────────────────────┐  ┌──────────────────────────┐ │
+│  │   React frontend     │  │      Rust backend        │ │
+│  │  (TypeScript + Vite) │  │      (tokio async)       │ │
+│  └──────────┬───────────┘  └─────────────┬────────────┘ │
+│             │    invoke / event           │              │
+│             └─────────────────────────────┘             │
+└────────────────────────────┬────────────────────────────┘
+                             │
+              ┌──────────────┼──────────────┐
+              │ HTTP         │ in-process   │ subprocess
+       ┌──────▼──────┐  ┌───▼────────┐  ┌──▼──────────┐
+       │ llama-server│  │  ort crate │  │    piper    │
+       │  :18080     │  │ (Parakeet  │  │ subprocess  │
+       │  :18081     │  │  ONNX CPU) │  │ (TTS, CPU)  │
+       │ (GPU, VRAM) │  │            │  │             │
+       └──────┬──────┘  └────────────┘  └─────────────┘
+              │
+       ┌──────▼──────┐
+       │  LanceDB    │
+       │  (embedded) │
+       └─────────────┘
 ```
 
 ---
@@ -73,36 +92,37 @@ orchestrator or frontend.
 
 ---
 
-### 2. Speech-to-text — Parakeet TDT
+### 2. Speech-to-text — Parakeet TDT via ort (in progress)
 
-| | |
-|--|--|
-| **Binary** | `parakeet-server-x86_64-pc-windows-msvc.exe` (PyInstaller frozen) |
-| **Source** | [groxaxo/parakeet-tdt-0.6b-v3-fastapi-openai](https://github.com/groxaxo/parakeet-tdt-0.6b-v3-fastapi-openai) |
-| **Model** | Parakeet TDT 0.6B (ONNX) — downloads from HuggingFace on first run (~600 MB) |
-| **Port** | 5092 (hardcoded in `app.py` line 4, cannot be changed via CLI) |
-| **API** | `POST /v1/audio/transcriptions` (OpenAI-compatible multipart) |
-| **Pipeline** | 48kHz stereo mic → VAD → downmix mono → normalize → POST WAV → transcript |
+**Current:** `parakeet-server-x86_64-pc-windows-msvc.exe` (PyInstaller frozen Python binary)
+**Target:** Parakeet ONNX loaded in-process via `ort` Rust crate — no Python, no subprocess, no port
 
-**VAD:** Energy threshold 0.005 RMS gates capture. 800 ms of silence triggers transcription.
-`clean_transcript()` filters hallucinations (`[BLANK_AUDIO]`, `(Music)`, etc.).
+| | Current | Target |
+|--|---------|--------|
+| **Runtime** | PyInstaller frozen binary | `ort` Rust crate in-process |
+| **Model** | Parakeet TDT 0.6B ONNX | Same model, same file |
+| **Port** | 5092 (hardcoded) | None — direct function call |
+| **Python** | Required | Eliminated |
+| **CPU/GPU** | CPU only | CPU only (deliberate — GPU reserved for LLM) |
+| **Cross-platform** | Needs rebuild per OS | Single ONNX file, works everywhere |
 
-**Known limitation:** Parakeet 0.6B struggles with non-native accents. The ONNX model
-inside the frozen binary is the bottleneck — not the server wrapper.
+**Pipeline (current):**
+`48kHz stereo → VAD → rubato 16kHz → WAV → HTTP POST → Python → ONNX → text`
 
-**Alternatives if switching:**
+**Pipeline (target):**
+`48kHz stereo → VAD → rubato 16kHz → log-mel spectrogram → ort tensor → Parakeet ONNX → CTC decode → text`
 
-| Alternative | Trade-off |
-|-------------|-----------|
-| **Parakeet 1.1B** | Better accuracy, larger model, needs a new PyInstaller build |
-| **whisper.cpp server** | Was the original STT. Public release binary available. Lower accuracy than Parakeet on clear speech. See retired code in WORK_LOG |
-| **`ort` Rust crate** | Run the Parakeet ONNX directly in-process — no Python, no HTTP, no PyInstaller. Cross-platform. Highest effort. See `STT_MIGRATION.md` |
-| **Whisper.cpp via HTTP** | `whisper-server` has public GitHub releases. Easier to distribute than Parakeet |
-| **OpenAI Whisper API** | Cloud. Requires API key. Breaks offline requirement |
-| **Groq / Deepgram** | Cloud, low latency. Breaks offline requirement |
+**What changes in code:** Only `audio/stt.rs` — `SttClient` becomes a struct holding
+an `ort::Session` instead of a `reqwest::Client`. Everything upstream (VAD, rubato,
+normalization) stays identical.
 
-> **Note:** Parakeet has no public release URL — it must be rebuilt with PyInstaller for
-> each target OS. This is the biggest distribution bottleneck. See `ROADMAP.md § Needs Decision`.
+**What changes in distribution:** The `.onnx` model file is already downloaded by
+the wizard. The PyInstaller `.exe` (~48 MB frozen Python) is removed from `externalBin`.
+
+See `STT_ORT_MIGRATION.md` for the full implementation plan.
+
+**Whisper is retired. Do not revisit it.** Lower accuracy on non-native accents confirmed.
+See WORK_LOG § Episodic memory role-blurring bug for context.
 
 ---
 
@@ -301,7 +321,7 @@ src-tauri/src/
 |---------|------|-------|
 | llama chat | 18080 | Primary inference |
 | llama embed | 18081 | Fixed to nomic-embed-text, never changes |
-| parakeet STT | 5092 | Hardcoded in parakeet's `app.py` — cannot be reconfigured via CLI |
+| parakeet STT | 5092 | **Being eliminated** — replaced by in-process ort inference |
 
 Port range 18080–18083 was chosen to avoid collision with LM Studio (8080) and other
 common local services. If 18080 is taken, change `llama_port` in `config.json`.
@@ -410,14 +430,19 @@ without a specific reason.
 | Vector DB | LanceDB (Rust crate) | Embedded, no server process, Arrow native |
 | Embedding model | nomic-embed-text (locked) | 768-dim, good quality, must not change |
 | Inference | llama.cpp REST | OpenAI-compatible, CPU+Vulkan on same binary |
-| STT | Parakeet TDT | Better accuracy than Whisper on clear speech |
-| TTS | Piper (subprocess) | Offline, natural quality, no server needed |
+| STT runtime | Parakeet ONNX via `ort` (in progress) | In-process, no Python, same model, CPU-only |
+| STT model | Parakeet TDT 0.6B | Better accuracy than Whisper on non-native speech |
+| STT execution | CPU only | GPU reserved exclusively for LLM — headroom for larger models |
+| TTS | Piper (subprocess) | Offline, natural quality, espeak-ng phonemization complex to replace |
+| TTS execution | CPU only | Same rationale — no GPU competition with LLM |
+| Audio resampling | rubato SincFixedIn | Device-rate-aware, adapts to any mic without code changes |
 | Audio I/O | cpal | Cross-platform, direct PCM access |
 | Proactivity | LLM-emitted `<defer>` tags | Model drives scheduling, no hardcoded rules |
 | Memory isolation | Two LanceDB tables (episodic + semantic) | Different update frequency and noise level |
 | Persona | Fixed system prompt, never diluted by retrieval | Memory injected beneath it as context |
 | Port range | 18080–18083 | Avoids LM Studio (8080) collision |
 | Context eviction | Trim oldest episodic first | Semantic memory is more stable; protect it |
+| Whisper | Retired permanently | Accuracy unacceptable on non-native accents — do not revisit |
 
 ---
 

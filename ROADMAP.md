@@ -24,292 +24,129 @@
 | Model hot-swap | Works without restart |
 | Memory reset | Wipes LanceDB + recent turns, requires typing RESET |
 | Graceful shutdown | All sidecars killed on app exit, DLLs released |
-| Git hygiene | .gitattributes, CRLF warnings gone |
 | App icon | SVG source → all sizes via `npm run tauri icon` |
-| TTS test button | Debug panel → dev tools → "🔊 test voice" |
-| TTS speed fix | WAV resampled to device rate + mono→stereo upmix, plays at natural speed |
-| Kokoro/whisper cleanup | All dead code, binaries (~21 MB), scripts, and 2.1 GB Whisper models removed |
-| Production build | MSI (96 MB) + NSIS (74 MB) installers, DLLs bundled alongside sidecars |
-| Unit tests (TTS) | 13 tests: `wav_to_f32`, `resample`, `clean_for_speech` — run via `cargo test` |
-| Wizard binary downloads | llama-server + piper downloaded by wizard on first run, AppData location |
+| TTS speed fix | WAV resampled to device rate + mono→stereo upmix |
+| Production build | MSI (96 MB) + NSIS (74 MB) installers |
+| Unit tests (TTS) | 13 tests: `wav_to_f32`, `resample`, `clean_for_speech` |
+| Wizard binary downloads | llama-server + piper downloaded by wizard on first run |
 | Rubato STT resampling | `SincFixedIn` 48kHz→16kHz, spawn_blocking, device-rate-aware |
 | Constants consolidation | `constants.rs` — all URLs, filenames, timeouts in one place |
-| Sidecar health polish | Amber "loading model" state, 2-poll debounce, no more online/offline flicker |
+| Sidecar health polish | Amber "loading model" state, 2-poll debounce |
 | Episodic role labels | `User:`/`Assistant:` prefix in retrieved memories, typed `Role` enum |
 | Security hardening | CSP, removed shell permissions, path validation, input limits |
 
 ---
 
-## 🧹 Pending cleanup & improvements
+## 🏗️ Next — STT migration to ort (in-process, CPU only)
 
-Small items that don't need a decision — just time.
+**Decision made:** Replace PyInstaller Parakeet server with native Rust `ort` inference.
+Full plan: `STT_ORT_MIGRATION.md`
+
+### Architecture decision (locked)
+
+```
+GPU (VRAM)  →  LLM only. Reserved entirely. Growing headroom for larger models.
+CPU         →  STT via ort (Parakeet ONNX, in-process)
+               TTS via Piper subprocess (unchanged)
+               Embeddings via llama-server CPU path
+```
+
+### What this unlocks
+- Python dependency eliminated entirely
+- macOS unblocked — ONNX model is cross-platform, no rebuild needed
+- Thin installer: parakeet-server.exe (~48 MB frozen Python) removed from `externalBin`
+- Port 5092 gone — direct function call, no network overhead
+- GPU fully free for LLM headroom
+
+### Implementation steps (in order)
+
+- [ ] Add `ort` + `rustfft` to `Cargo.toml`
+- [ ] Implement `log_mel_spectrogram()` in Rust, verify against Python server output
+- [ ] Implement greedy CTC decoder using downloaded tokens.txt
+- [ ] Rewrite `audio/stt.rs` — `SttClient` holds `ort::Session` instead of `reqwest::Client`
+- [ ] Wire into `run_stt_loop` via `spawn_blocking`
+- [ ] Initialise `SttClient` in app setup, manage as app state
+- [ ] Remove parakeet from `tauri.conf.json` externalBin
+- [ ] Remove parakeet from monitor health-check loop
+- [ ] Remove parakeet row from `SidecarHealth.tsx`
+- [ ] Test: English, non-native accent — confirm same or better accuracy
+- [ ] Confirm zero GPU memory used during STT
+
+---
+
+## 🔜 Near-term follow-on
+
+### GPU layer offload slider
+
+llama-server already supports `-ngl N`. A slider in the Models tab exposes it:
+`0 layers ← ——————— → all layers (current default: 999)`
+
+- `ngl=0` → full CPU, 0 VRAM — any machine can run any model
+- `ngl=N` → hybrid — first N layers GPU, rest CPU
+- `ngl=999` → all layers GPU (current)
+
+LM Studio calls this "GPU Offload". Implementation: one config field + one slider +
+one changed CLI arg to llama-server. No model changes.
+
+**Why it matters:** Once Parakeet is off the GPU, the LLM is the only VRAM consumer.
+This slider lets users tune speed vs model size headroom freely.
+
+---
+
+## 🧹 Pending cleanup
 
 | Item | Notes |
 |------|-------|
-| VCRedist SHA256 placeholder | Replace `c760c594...` in `constants.rs` with real hash before shipping |
-| `ggml-cpu-*.dll` not in installer | GPU works (Vulkan), CPU fallback uses slow reference kernels |
+| VCRedist SHA256 placeholder | Replace `c760c594...` in `constants.rs` with real hash |
+| `capture error` still `eprintln!` | Should route to debug event log |
+| STT VAD diagnostic logs | Make debug-only (`#[cfg(debug_assertions)]`) |
+| `ggml-cpu-*.dll` not in installer | CPU fallback slow without them |
 | `libomp140.x86_64.dll` not in installer | OpenMP parallelism for llama-server |
-| STT VAD diagnostic logs | `VAD active — N frames` every 5s — useful for debugging, could be debug-only |
-| `capture error` still `eprintln!` | Should route to debug event log like other audio errors |
-| Linear interpolation in TTS resampler | Works, but could be upgraded to rubato for consistency |
-| `tauri-specta` typed IPC bindings | Type-safe invoke/event at the frontend/Rust boundary |
-| Vitest frontend component tests | `useChat`, `SchedulerPanel` — low priority while UI is prototype |
+| TTS rubato upgrade | Linear interpolation works; could be upgraded for consistency |
+| `tauri-specta` typed IPC | Type-safe invoke/event at the Rust/frontend boundary |
 
 ---
 
-## 🔴 Needs Decision
-
-These items are blocked on a strategic choice. Nothing can be implemented until the direction is picked.
-
----
-
-### 1. Installer strategy — bundle vs. thin
-
-**Current state:** 96 MB MSI that bundles the app + parakeet + llama + piper DLLs.
-`espeak-ng-data/` is still missing (piper TTS broken in production).
-
-**Option A — Keep bundling, fix the gaps**
-- Add the remaining missing files (`espeak-ng-data/`, `ggml-cpu-*.dll`, `libomp140`)
-- Installer grows to ~200-250 MB
-- Works fully offline after install
-- Every release ships the full binary stack even if nothing changed
-
-**Option B — Thin installer + wizard downloads**
-- Installer shrinks to ~110 MB (app exe + parakeet only)
-- Wizard downloads llama-server + DLLs from `ggerganov/llama.cpp` releases
-- Wizard downloads piper + DLLs + `espeak-ng-data/` from `rhasspy/piper` releases
-- Automatically fixes `espeak-ng-data` problem — piper zip already contains it correctly laid out
-- Requires internet on first run (already required for models anyway)
-- `binaries/` being gitignored becomes intentional, not a limitation
-- Individual components can be updated without a full reinstall
-
-**Blocker:** parakeet-server (see item 2 below).
-
----
-
-### 2. Parakeet distribution — no public release URL
-
-**The problem:** `parakeet-server.exe` is a custom PyInstaller freeze of
-[groxaxo/parakeet-tdt-0.6b-v3-fastapi-openai](https://github.com/groxaxo/parakeet-tdt-0.6b-v3-fastapi-openai).
-There is no published binary anyone can download. It must be rebuilt from source
-every time (Python environment, PyInstaller, ~48 MB output).
-This also means **macOS and Linux would each need their own build**.
-
-**Options:**
-
-| Option | Effort | Notes |
-|--------|--------|-------|
-| A) Keep in installer (`externalBin`) | None | Current approach. Works but ties distribution to the one built binary |
-| B) Host on a private GitHub release | Low | Upload the `.exe` to a private repo release. Wizard downloads it. Automatable with GitHub Actions |
-| C) Replace parakeet with `ort` Rust crate | High | In-process ONNX inference, no Python, no PyInstaller. Cross-platform by default. See STT_MIGRATION.md |
-| D) Replace with Whisper.cpp via HTTP | Medium | `whisper-server` has public releases. Worse accuracy than Parakeet |
-| E) Use OpenAI-compatible STT API (cloud) | Low code | Whisper API, Groq, etc. Requires API key, not offline |
-
-**Recommendation when ready:** Option B unblocks thin installer immediately.
-Option C is the right long-term answer (removes Python dependency entirely).
-
----
-
-### 3. (Space reserved — add yours here)
-
----
-
-## ⬜ Remaining
-
-### Production installer — known gaps
-- `espeak-ng-data/` directory not bundled — piper can't convert text to phonemes without it.
-  Tauri resources map errors on directory globs; options:
-  (a) Pass `--espeak-data` flag to piper subprocess from `resource_dir()` + bundle via array format
-  (b) Download during SetupWizard first run
-- `ggml-cpu-*.dll` backends not bundled — GPU via Vulkan works (`ggml-vulkan.dll` is in),
-  but CPU multi-threading backends are absent. Fallback is reference (slow) CPU kernels.
-- `libomp140.x86_64.dll` not bundled — needed for OpenMP parallelism in llama-server.
-  Has `.x86_64` in name which confused Tauri's resource path validator; can be renamed.
-- VCRedist DLLs (VCRUNTIME140.dll etc.) handled by SetupWizard, not bundled directly.
-
-### Vitest / frontend tests
-- Add Vitest + `@tauri-apps/api/mocks` for React component tests
-- Priority targets: `useChat` (streaming, TTS routing), `SchedulerPanel` display logic
-- ~10 min to scaffold: install Vitest, configure vite.config.ts, add `npm test` script
-
-### STT accuracy (low priority — model limitation)
-Parakeet TDT 0.6B struggles with non-native accents. Options if needed:
-- Parakeet 1.1B (larger, better)
-- Migrate to `ort` Rust crate for in-process inference (see STT_MIGRATION.md)
+## ⬜ Later
 
 ### macOS support
-- Run `scripts/fetch-sidecars-macos.sh`
-- Parakeet binary needs macOS build
-- Piper has `piper_macos_aarch64.tar.gz` in releases
+Unblocked by ort migration. After that:
+- `binary_store.rs` already has macOS asset patterns for piper + llama
 - Test on M1/M2
+
+### Vitest frontend tests
+Low priority while UI is prototype stage.
 
 ---
 
 ## Architecture quick reference
 
+### Hardware boundary (locked)
+
+| Resource | Owner | Rule |
+|----------|-------|------|
+| GPU VRAM | LLM only | Nothing else. Parakeet, Piper, embeddings — all CPU |
+| CPU | Everything audio/memory | STT (ort), TTS (Piper), LanceDB, embeddings |
+
 ### Ports
-| Service | Port |
-|---------|------|
-| llama chat | 18080 |
-| llama embed | 18081 |
-| parakeet STT | **5092** (hardcoded in parakeet binary, cannot change) |
-| kokoro (unused) | 18083 |
+| Service | Port | Notes |
+|---------|------|-------|
+| llama chat | 18080 | GPU inference |
+| llama embed | 18081 | CPU, fixed to nomic-embed-text |
+| parakeet STT | 5092 | **Being eliminated** — replaced by in-process ort |
 
 ### Binary sources
 | Binary | Source | Notes |
 |--------|--------|-------|
-| llama-server | ggerganov/llama.cpp CPU build | + Vulkan DLLs for GPU |
-| parakeet-server | groxaxo/parakeet-tdt-0.6b-v3-fastapi-openai | PyInstaller frozen |
-| piper | rhasspy/piper v2023.11.14-2 | piper_windows_amd64.zip |
-| whisper-server | retired | replaced by Parakeet |
+| llama-server | ggerganov/llama.cpp | CPU build + Vulkan DLLs, wizard-downloaded |
+| parakeet-server | groxaxo/... PyInstaller | **Being eliminated** — ort migration in progress |
+| piper | rhasspy/piper | Subprocess, wizard-downloaded, unchanged |
 
-### TTS pipeline detail
-```
-response text
-→ clean_for_speech() strips markdown/code/URLs
-→ Piper subprocess (stdin=text, --model=en_US-lessac-medium.onnx)
-→ WAV file @ 22050Hz mono
-→ wav_to_f32() parses header (bytes 22-27) → (samples, rate, channels)
-→ resample() linear interp 22050→device_rate
-→ upmix mono→stereo (duplicate L+R)
-→ cpal playback
-```
-
-### STT pipeline detail
-```
-mic @ 48000Hz stereo
-→ VAD threshold 0.005 RMS → capture frames
-→ 800ms silence → transcribe
-→ downmix stereo→mono
-→ normalize to 0.7 peak amplitude
-→ pcm_to_wav() encode
-→ POST /v1/audio/transcriptions @ parakeet:5092
-→ clean_transcript() filter hallucinations
-→ emit voice_transcript Tauri event
-→ sendMessage()
-```
-
-### Key config file
-`%APPDATA%\com.proactive.agent\config.json` — delete to reset all settings to defaults.
-
-### Parakeet binary notes
-- Port 5092 hardcoded in app.py line 4 (cannot be changed via CLI)
-- On first run, server downloads ONNX model from HuggingFace to its cache (~600MB)
-- Browser tab auto-open was patched out before building
-- Binary built with: `pyinstaller --onefile --collect-all onnx-asr --collect-data onnx_asr --add-data dist-info:dist-info app.py`
-
-### Piper binary notes
-- Downloaded from: `https://github.com/rhasspy/piper/releases/download/2023.11.14-2/piper_windows_amd64.zip`
-- Requires alongside exe: `onnxruntime.dll`, `espeak-ng.dll`, `piper_phonemize.dll`, `espeak-ng-data/`
-- Voice model: `models/tts/en_US-lessac-medium.onnx` + `.onnx.json`
-- Voices library: https://github.com/rhasspy/piper-voices
-
----
-
-## ♻️ Self-recovery after deleting `binaries/`
-
-**Goal:** deleting `binaries/` and restarting should trigger full re-setup with no terminal commands.
-
-### Current status per component
-
-| Component | Recoverable without terminal? | How |
-|-----------|------------------------------|-----|
-| nomic-embed-text model | ✅ | SetupWizard downloads it |
-| Piper voice model | ✅ | SetupWizard downloads it |
-| Parakeet ONNX model | ✅ | Parakeet server downloads on first run |
-| **llama-server binary** | ❌ | Requires `npm run setup` (dev tool) |
-| **piper binary** | ❌ | Requires `npm run setup` (dev tool) |
-| **parakeet-server binary** | ❌ | Requires manual PyInstaller build |
-
-### What needs to be added to SetupWizard
-
-**llama-server binary** — download CPU build + Vulkan DLLs from GitHub releases:
-```
-GET https://api.github.com/repos/ggerganov/llama.cpp/releases/latest
-→ Download piper_windows_amd64.zip asset
-→ Extract llama-server.exe → binaries/llama/llama-server-x86_64-pc-windows-msvc.exe
-→ Download Vulkan zip → extract all DLLs to binaries/llama/
-```
-
-**piper binary** — download from GitHub releases:
-```
-GET https://api.github.com/repos/rhasspy/piper/releases/latest
-→ Download piper_windows_amd64.zip
-→ Extract piper.exe + DLLs + espeak-ng-data/ → binaries/piper/
-```
-
-**parakeet-server binary** — hardest. Options:
-- a) Host the frozen binary on a private GitHub release and download it
-- b) Ship it inside the Tauri installer bundle (via `externalBin`) — best option for distribution
-- c) Accept that rebuilding it requires Python (developer scenario only)
-
-### For production (installer)
-When built with `npm run tauri build`, Tauri bundles ALL `externalBin` entries into
-the installer package. A user installing via the `.msi` gets all binaries included —
-they never see `binaries/` as a separate folder. Self-recovery doesn't apply.
-
-Self-recovery only matters for the **developer workflow** (working from source).
-For that: `npm run setup` recovers llama + piper. Parakeet binary needs a separate step.
-
-### Roadmap item: add binary downloads to SetupWizard
-Add a `download_required_binaries()` Tauri command that:
-1. Checks if `llama-server` is present and functional (`/health` returns 200)
-2. If not: downloads CPU build + Vulkan DLLs from ggerganov/llama.cpp latest
-3. Checks if `piper` is present
-4. If not: downloads piper_windows_amd64.zip from rhasspy/piper latest
-5. Shows progress bars (same infrastructure as model downloads)
-6. SetupWizard step 0 (before models): "Downloading required tools"
-
-This would make `npm run setup` completely obsolete for both developers and users.
-
----
-
-## 🧹 Cleanup — obsolete code to remove
-
-These are leftovers from replaced/retired features. Low risk, no functionality depends on them.
-
-### Binaries (safe to delete)
-- `binaries/whisper/` — entire directory. Whisper retired, replaced by Parakeet.
-- `binaries/kokoro/` — entire directory. sherpa-onnx replaced by Piper subprocess.
-- `binaries/kokoro-server-x86_64-pc-windows-msvc.exe` — root placeholder, 0 bytes.
-- `binaries/whisper-server-x86_64-pc-windows-msvc.exe` — root placeholder, 0 bytes.
-- `binaries/whisper.dll` — DLL from old whisper layout.
-- Root-level DLLs in `binaries/` (CONCRT140, MSVCP140, SDL2, ggml-*.dll etc.) — these
-  belong in `binaries/llama/` and are already there. Root copies are orphaned.
-
-### Rust — `config.rs`
-- `kokoro_port: u16` field — TTS now uses Piper subprocess, no HTTP server, no port needed.
-- Remove from `AppConfig` struct and `with_data_dir()` default.
-
-### Rust — `lib.rs`
-- `kokoro_port` variable in `spawn_sidecars()` (line ~367).
-- The whole TTS sidecar spawn block that checks `find_sidecar("kokoro-server")` —
-  Piper is a subprocess call from `TtsClient`, not a long-running server.
-  This block logs "TTS (sherpa-onnx) ready" which is misleading.
-
-### Rust — `monitor.rs`
-- `("kokoro", kokoro_port)` entry in the sidecar health check loop —
-  kokoro has no HTTP server to ping. Remove to stop the red dot and timeout noise.
-
-### Rust — `commands.rs`
-- `root.join("whisper")` in `diagnose_chat_server` (line ~426) — dead path.
-
-### Frontend — `SidecarHealth.tsx`
-- `'kokoro'` in the `SIDECARS` array — no server to monitor. Remove the row.
-
-### Scripts
-- `scripts/kokoro_server.py` — Python Kokoro server, replaced by Piper.
-- `scripts/build-kokoro-exe.ps1` — builds the Python Kokoro binary, no longer needed.
-- `app-icon.png`, `UsersRothWorkproactive-aiapp-icon.png` — leftover PNG attempts,
-  `app-icon.svg` is the canonical source now.
-- `scripts/make_icon.py` — one-off script, no longer needed.
-
-### Models
-- `models/ggml-medium.en.bin` — old Whisper medium model, ~1.5 GB. Delete to free space.
-- `models/ggml-small.en.bin` — old Whisper small model, ~466 MB. Delete to free space.
-- `models/ggml-base.en.bin` — old Whisper base model, ~142 MB. Delete to free space.
-
-### tauri.conf.json
-- `"../binaries/kokoro-server"` in `externalBin` — Piper is a subprocess, not a sidecar.
-  Replace with `"../binaries/piper/piper"` (or remove if already updated).
-</content>
+### Key files
+| File | Purpose |
+|------|---------|
+| `STT_ORT_MIGRATION.md` | Full ort migration plan |
+| `ARCHITECTURE.md` | Component inventory, decisions, alternatives |
+| `WORK_LOG.md` | Bug history, component history, decisions rationale |
+| `CONTRIBUTING.md` | Git workflow — branch → test → merge |
+| `SUPERVISOR.md` | AI session review checklist and hard constraints |
