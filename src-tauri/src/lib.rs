@@ -182,6 +182,7 @@ pub fn run() {
             commands::check_binaries_ready,
             commands::download_required_binaries,
             commands::init_stt_client,
+            commands::start_sidecars,
             commands::check_system_deps,
             commands::install_vcredist,
             #[cfg(debug_assertions)] commands::open_llama_diagnostic,

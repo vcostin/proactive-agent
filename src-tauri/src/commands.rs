@@ -220,6 +220,25 @@ pub async fn speak_text(
 /// Start microphone capture and STT loop.
 /// cpal::Stream is !Send on WASAPI so we keep it on a dedicated std::thread.
 /// Transcripts arrive as `voice_transcript` Tauri events.
+/// Start (or restart) all sidecars after the wizard downloads binaries.
+/// Called by the wizard after Step 1 completes so llama/embed start without
+/// requiring the user to restart the app.
+#[tauri::command]
+pub async fn start_sidecars(
+    config: State<'_, SharedConfig>,
+    event_log: State<'_, SharedEventLog>,
+    chat_child: State<'_, SharedChatChild>,
+    process_pids: State<'_, SharedProcessPids>,
+) -> CmdResult<()> {
+    crate::spawn_sidecars(
+        config.inner().clone(),
+        event_log.inner().clone(),
+        chat_child.inner().clone(),
+        process_pids.inner().clone(),
+    );
+    Ok(())
+}
+
 /// (Re-)initialise the ort STT session after the wizard downloads the model.
 /// Also called automatically at startup if the model is already present.
 #[tauri::command]

@@ -42,7 +42,11 @@ export function SetupWizard({ status, onComplete }: Props) {
       await invoke('download_required_binaries');
       const fresh = await invoke<BinariesStatus>('check_binaries_ready');
       setBinaries(fresh);
-      if (fresh.llama_ready && fresh.piper_ready) setStep('models');
+      if (fresh.llama_ready && fresh.piper_ready) {
+        // Start llama-server and embed server now — no app restart needed
+        await invoke('start_sidecars').catch(() => {});
+        setStep('models');
+      }
     } catch (e) {
       setError(String(e));
     } finally {
@@ -56,8 +60,10 @@ export function SetupWizard({ status, onComplete }: Props) {
     setError(null);
     try {
       await invoke('download_required_models');
-      // Initialise the in-process ort STT session now that the model is downloaded
-      await invoke('init_stt_client').catch(() => {}); // non-fatal if model not ready yet
+      // Initialise ort STT session with the freshly downloaded model
+      await invoke('init_stt_client').catch(() => {});
+      // Ensure sidecars are running (covers first-run where tools were already present)
+      await invoke('start_sidecars').catch(() => {});
       setStep('chat');
     } catch (e) {
       setError(String(e));
