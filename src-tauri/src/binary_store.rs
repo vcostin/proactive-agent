@@ -355,21 +355,30 @@ async fn download_ort_dylib(client: &Client, app: &tauri::AppHandle) -> Result<(
         return Ok(());
     }
 
-    let data = fetch_with_progress(client, app, "onnxruntime", crate::constants::ORT_CPU_DLL_URL).await?;
+    // NuGet package is a zip — extract specific paths for the CPU-only DLLs.
+    // These paths are exact matches inside Microsoft.ML.OnnxRuntime.nupkg.
+    use crate::constants::{ORT_CPU_DLL_URL, ORT_CPU_DLL_PATH_IN_PKG, ORT_CPU_SHARED_PATH_IN_PKG};
+    let data = fetch_with_progress(client, app, "onnxruntime", ORT_CPU_DLL_URL).await?;
     let cursor = std::io::Cursor::new(&data);
     let mut archive = zip::ZipArchive::new(cursor)?;
+    let mut found_dll = false;
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i)?;
-        let name = entry.name().to_lowercase();
-        if name.ends_with("onnxruntime.dll") {
+        let name = entry.name().to_owned();
+        // NuGet uses forward slashes and exact paths
+        if name == ORT_CPU_DLL_PATH_IN_PKG || name.ends_with("/onnxruntime.dll") {
             let mut out = std::fs::File::create(&dll_dest)?;
             std::io::copy(&mut entry, &mut out)?;
-        } else if name.ends_with("onnxruntime_providers_shared.dll") {
+            found_dll = true;
+        } else if name == ORT_CPU_SHARED_PATH_IN_PKG || name.ends_with("/onnxruntime_providers_shared.dll") {
             let mut out = std::fs::File::create(&shared_dest)?;
             std::io::copy(&mut entry, &mut out)?;
         }
     }
-    emit_done(app, "onnxruntime", "CPU-only 1.19.2 installed");
+    if !found_dll {
+        anyhow::bail!("onnxruntime.dll not found inside NuGet package — unexpected package structure");
+    }
+    emit_done(app, "onnxruntime", "CPU-only 1.19.2 (NuGet) installed — no GPU providers");
     Ok(())
 }
 

@@ -13,11 +13,15 @@ pub const SIDECAR_HOST: &str = "127.0.0.1";
 
 // ── Audio ─────────────────────────────────────────────────────────────────────
 
-/// ONNX Runtime CPU-only DLL for ort rc.12.
-/// Microsoft's official CPU package — no DirectML/GPU dependencies.
-/// ORT 1.19.2 implements API version 18+ which satisfies ort rc.12's minimum of 17.
+/// ONNX Runtime CPU-only DLL — from the NuGet CPU package, NOT the GitHub zip.
+/// The GitHub win-x64 zip still includes DirectML which initializes GPU hardware
+/// during DllMain and hangs on some systems. The NuGet Microsoft.ML.OnnxRuntime
+/// package is built WITHOUT DirectML/GPU providers — truly CPU only.
 pub const ORT_CPU_DLL_URL: &str =
-    "https://github.com/microsoft/onnxruntime/releases/download/v1.19.2/onnxruntime-win-x64-1.19.2.zip";
+    "https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime/1.19.2/microsoft.ml.onnxruntime.1.19.2.nupkg";
+/// Path inside the NuGet package (which is a zip) to the CPU-only DLL.
+pub const ORT_CPU_DLL_PATH_IN_PKG: &str = "runtimes/win-x64/native/onnxruntime.dll";
+pub const ORT_CPU_SHARED_PATH_IN_PKG: &str = "runtimes/win-x64/native/onnxruntime_providers_shared.dll";
 
 /// Target sample rate for STT input. Parakeet TDT (and Whisper) were trained
 /// on 16 kHz mono audio — sending the native device rate and relying on the
