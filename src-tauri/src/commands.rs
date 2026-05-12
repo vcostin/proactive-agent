@@ -156,8 +156,12 @@ pub async fn download_required_models(
             continue;
         }
 
+        // HEAD request first to get file size — HuggingFace often uses chunked transfer
+        let total = client.head(*url).send().await.ok()
+            .and_then(|r| r.content_length())
+            .unwrap_or(0);
         let resp = client.get(*url).send().await.map_err(to_cmd_err)?;
-        let total = resp.content_length().unwrap_or(0);
+        let total = if total > 0 { total } else { resp.content_length().unwrap_or(0) };
         let mut downloaded = 0u64;
 
         let mut stream = resp.bytes_stream();
@@ -242,7 +246,11 @@ pub async fn start_sidecars(
 /// (Re-)initialise the ort STT session after the wizard downloads the model.
 /// Also called automatically at startup if the model is already present.
 #[tauri::command]
-pub async fn init_stt_client(stt_client: State<'_, SharedSttClient>) -> CmdResult<()> {
+pub async fn init_stt_client(
+    stt_client: State<'_, SharedSttClient>,
+    event_log: State<'_, SharedEventLog>,
+    app_handle: tauri::AppHandle,
+) -> CmdResult<()> {
     use crate::constants::{STT_MODEL_FILE, STT_TOKENS_FILE};
     use crate::config::AppConfig;
 
@@ -253,13 +261,32 @@ pub async fn init_stt_client(stt_client: State<'_, SharedSttClient>) -> CmdResul
         return Err("STT model files not found — run the wizard to download them".to_string());
     }
 
-    let client = crate::audio::stt::SttClient::new(&model_path, &tokens_path)
-        .map_err(to_cmd_err)?;
+    let log = event_log.inner().clone();
+    let handle = app_handle.clone();
+    let stt_ref = stt_client.inner().clone();
 
-    if let Ok(mut guard) = stt_client.inner().lock() {
-        *guard = Some(Arc::new(client));
+    // spawn_blocking: SttClient::new loads onnxruntime.dll via native code —
+    // running it on the async executor risks blocking or crashing the thread pool.
+    crate::monitor::emit_debug_event(&app_handle, &log, "[STT]", "loading ort session…").await;
+    match tokio::task::spawn_blocking(move || {
+        crate::audio::stt::SttClient::new(&model_path, &tokens_path)
+    }).await {
+        Ok(Ok(client)) => {
+            if let Ok(mut g) = stt_ref.lock() { *g = Some(Arc::new(client)); }
+            crate::monitor::emit_debug_event(&handle, &log, "[STT]", "ort session ready — CPU").await;
+            Ok(())
+        }
+        Ok(Err(e)) => {
+            let msg = format!("ort session failed: {e}");
+            crate::monitor::emit_debug_event(&handle, &log, "[STT]", &msg).await;
+            Err(msg)
+        }
+        Err(e) => {
+            let msg = format!("ort task panicked: {e}");
+            crate::monitor::emit_debug_event(&handle, &log, "[STT]", &msg).await;
+            Err(msg)
+        }
     }
-    Ok(())
 }
 
 #[tauri::command]
@@ -325,10 +352,18 @@ pub async fn start_voice_input(
         .unwrap_or((16000, 1));
 
     // Get the STT client — returns error if model hasn't been downloaded yet
-    let client = stt_client.inner().lock()
-        .map_err(|_| "STT client mutex poisoned".to_string())?
-        .clone()
-        .ok_or_else(|| "STT model not ready — complete the setup wizard first".to_string())?;
+    let client = {
+        let guard = stt_client.inner().lock()
+            .map_err(|_| "STT client mutex poisoned".to_string())?;
+        match guard.clone() {
+            Some(c) => c,
+            None => {
+                let msg = "STT model not ready — complete Step 2 of the wizard first";
+                debug_event_sync(&app_handle, msg.to_string());
+                return Err(msg.to_string());
+            }
+        }
+    };
 
     tauri::async_runtime::spawn(crate::audio::run_stt_loop(rx, client, sample_rate, channels, app_handle));
 

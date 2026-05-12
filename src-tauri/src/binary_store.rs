@@ -208,8 +208,16 @@ async fn fetch_with_progress(
     label: &str,
     url: &str,
 ) -> Result<Vec<u8>> {
+    // HuggingFace and GitHub often use chunked transfer without Content-Length on GET.
+    // A HEAD request up-front gives us the file size for an accurate progress bar.
+    let total = client.head(url).send().await
+        .ok()
+        .and_then(|r| r.content_length())
+        .unwrap_or(0);
+
     let resp = client.get(url).send().await?.error_for_status()?;
-    let total = resp.content_length().unwrap_or(0);
+    // Fall back to GET Content-Length if HEAD didn't return one
+    let total = if total > 0 { total } else { resp.content_length().unwrap_or(0) };
     let mut downloaded = 0u64;
     let mut buf = Vec::with_capacity(total as usize);
     let mut stream = resp.bytes_stream();
