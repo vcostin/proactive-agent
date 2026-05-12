@@ -67,7 +67,7 @@ impl AudioCapture {
                         let _ = audio_tx.try_send(data.to_vec());
                     }
                 },
-                |err| eprintln!("[AUDIO] capture error: {err}"),
+                |err| eprintln!("[AUDIO] cpal stream error (check Windows audio settings): {err}"),
                 None,
             )
             .context("failed to build input stream")?;

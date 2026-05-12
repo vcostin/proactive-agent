@@ -298,6 +298,8 @@ pub async fn start_voice_input(
 ) -> CmdResult<()> {
     use std::sync::atomic::{AtomicBool, Ordering};
 
+    debug_event_sync(&app_handle, "start_voice_input called".to_string());
+
     // Stop any existing recording
     if let Ok(mut g) = voice_stop.inner().lock() {
         if let Some(flag) = g.take() {
@@ -333,13 +335,16 @@ pub async fn start_voice_input(
                     }
                     debug_event_sync(&app_for_thread, "capture stopped".to_string());
                 }
-                Err(e) => eprintln!("[AUDIO] capture failed: {e}"),
+                Err(e) => debug_event_sync(&app_for_thread, format!("capture failed: {e}")),
             }
         });
 
     if let Err(e) = thread_result {
-        return Err(format!("failed to spawn audio thread: {e}"));
+        let msg = format!("failed to spawn audio thread: {e}");
+        debug_event_sync(&app_handle, msg.clone());
+        return Err(msg);
     }
+    debug_event_sync(&app_handle, "audio thread spawned — waiting for device config".to_string());
 
     // Store stop flag so stop_voice_input can signal the thread
     if let Ok(mut g) = voice_stop.inner().lock() {
@@ -347,9 +352,10 @@ pub async fn start_voice_input(
     }
 
     // Wait briefly for the capture thread to report its actual sample rate/channels
-    let (sample_rate, channels) = cfg_rx
-        .recv_timeout(std::time::Duration::from_secs(3))
-        .unwrap_or((16000, 1));
+    let (sample_rate, channels) = match cfg_rx.recv_timeout(std::time::Duration::from_secs(3)) {
+        Ok(v) => { debug_event_sync(&app_handle, format!("device config received: {}Hz {}ch", v.0, v.1)); v }
+        Err(_) => { debug_event_sync(&app_handle, "device config timeout — capture may have failed".to_string()); (16000, 1) }
+    };
 
     // Get the STT client — returns error if model hasn't been downloaded yet
     let client = {
@@ -365,6 +371,7 @@ pub async fn start_voice_input(
         }
     };
 
+    debug_event_sync(&app_handle, "STT client found — spawning STT loop".to_string());
     tauri::async_runtime::spawn(crate::audio::run_stt_loop(rx, client, sample_rate, channels, app_handle));
 
     Ok(())
