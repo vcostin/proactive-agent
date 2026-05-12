@@ -115,10 +115,11 @@ async fn download_llama(client: &Client, app: &tauri::AppHandle) -> Result<()> {
     let tag = release["tag_name"].as_str().unwrap_or("unknown").to_string();
 
     // Step 1: GPU DLLs (Windows only — Vulkan backend)
+    // Uses "llama-server" as the progress key so the wizard progress bar matches.
     #[cfg(target_os = "windows")]
     if let Some(gpu_pat) = platform::LLAMA_GPU_PAT {
         if let Some(url) = find_asset(&release, gpu_pat) {
-            let data = fetch_with_progress(client, app, "llama-vulkan.zip", &url).await?;
+            let data = fetch_with_progress(client, app, "llama-server", &url).await?;
             extract_zip_dlls(&data, &llama_dir)
                 .context("extracting Vulkan DLLs")?;
         }
@@ -128,7 +129,7 @@ async fn download_llama(client: &Client, app: &tauri::AppHandle) -> Result<()> {
     let cpu_url = find_asset(&release, platform::LLAMA_CPU_PAT)
         .with_context(|| format!("no llama.cpp CPU asset matching '{}' in release {tag}", platform::LLAMA_CPU_PAT))?;
 
-    let data = fetch_with_progress(client, app, "llama-cpu.zip", &cpu_url).await?;
+    let data = fetch_with_progress(client, app, "llama-server", &cpu_url).await?;
     let dest_name = format!("llama-server-{}", platform::TRIPLE);
     #[cfg(target_os = "windows")]
     let dest_name = format!("{dest_name}.exe");
@@ -155,7 +156,7 @@ async fn download_piper(client: &Client, app: &tauri::AppHandle) -> Result<()> {
     let url = find_asset(&release, platform::PIPER_PAT)
         .with_context(|| format!("no piper asset matching '{}' in release {tag}", platform::PIPER_PAT))?;
 
-    let data = fetch_with_progress(client, app, "piper.zip", &url).await?;
+    let data = fetch_with_progress(client, app, "piper", &url).await?;
 
     let dest_name = format!("piper-{}", platform::TRIPLE);
     #[cfg(target_os = "windows")]

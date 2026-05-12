@@ -192,9 +192,10 @@ function ToolsStep({ binaries, progress, downloading, error, onDownload, onSkip 
       </p>
 
       {tools.map(t => {
-        const p = progress[t.key] ?? progress[`${t.key}.zip`];
+        // Key matches what binary_store.rs emits: "llama-server" or "piper"
+        const p = progress[t.key];
         const pct = p && p.total > 0 ? Math.round((p.downloaded / p.total) * 100) : 0;
-        const borderColor = t.ready ? 'var(--success)' : 'var(--border)';
+        const borderColor = p && !p.done ? 'var(--accent)' : t.ready ? 'var(--success)' : 'var(--border)';
 
         return (
           <div key={t.key} style={{
@@ -211,16 +212,7 @@ function ToolsStep({ binaries, progress, downloading, error, onDownload, onSkip 
             <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: p && !p.done ? 6 : 0 }}>
               {t.desc}
             </div>
-            {p && !p.done && (
-              <div>
-                <div style={{ height: 3, background: '#222', borderRadius: 2, overflow: 'hidden' }}>
-                  <div style={{ height: '100%', width: `${pct}%`, background: 'var(--accent)', transition: 'width 0.2s' }} />
-                </div>
-                <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 3 }}>
-                  {fmtBytes(p.downloaded)} / {fmtBytes(p.total)} — {pct}%
-                </div>
-              </div>
-            )}
+            {p && !p.done && <ProgressBar downloaded={p.downloaded} total={p.total} pct={pct} />}
           </div>
         );
       })}
@@ -303,16 +295,7 @@ function ModelsStep({ status, deps, onDepsChange, progress, downloading, error, 
             <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: p && !p.done ? 6 : 0 }}>
               {m.desc}
             </div>
-            {p && !p.done && (
-              <div>
-                <div style={{ height: 3, background: '#222', borderRadius: 2, overflow: 'hidden' }}>
-                  <div style={{ height: '100%', width: `${pct}%`, background: 'var(--accent)', transition: 'width 0.2s' }} />
-                </div>
-                <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 3 }}>
-                  {fmtBytes(p.downloaded)} / {fmtBytes(p.total)} — {pct}%
-                </div>
-              </div>
-            )}
+            {p && !p.done && <ProgressBar downloaded={p.downloaded} total={p.total} pct={pct} />}
           </div>
         );
       })}
@@ -413,6 +396,36 @@ function StepPill({ n, label, active, done }: { n: number; label: string; active
 
 function Connector() {
   return <div style={{ flex: 1, borderTop: '1px solid var(--border)', marginTop: 12, alignSelf: 'flex-start' }} />;
+}
+
+function ProgressBar({ downloaded, total, pct }: { downloaded: number; total: number; pct: number }) {
+  const indeterminate = total === 0;
+  return (
+    <div style={{ marginTop: 8 }}>
+      {/* Track */}
+      <div style={{
+        height: 6, background: 'rgba(255,255,255,0.08)',
+        borderRadius: 3, overflow: 'hidden',
+      }}>
+        <div style={{
+          height: '100%',
+          width: indeterminate ? '40%' : `${pct}%`,
+          background: 'var(--accent)',
+          borderRadius: 3,
+          transition: indeterminate ? 'none' : 'width 0.3s ease',
+          animation: indeterminate ? 'progress-slide 1.4s ease-in-out infinite' : 'none',
+        }} />
+      </div>
+      {/* Label */}
+      <div style={{
+        display: 'flex', justifyContent: 'space-between',
+        fontSize: 10, color: 'var(--text-muted)', marginTop: 4,
+      }}>
+        <span>{fmtBytes(downloaded)}{total > 0 ? ` / ${fmtBytes(total)}` : ''}</span>
+        {total > 0 && <span style={{ color: 'var(--accent)', fontWeight: 600 }}>{pct}%</span>}
+      </div>
+    </div>
+  );
 }
 
 function ErrorBox({ msg }: { msg: string }) {
