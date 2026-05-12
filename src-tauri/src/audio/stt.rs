@@ -49,29 +49,16 @@ impl SttClient {
     pub fn new(model_path: &Path, tokens_path: &Path) -> Result<Self> {
         use ort::execution_providers::CPUExecutionProvider;
 
-        // Use the dedicated CPU-only onnxruntime.dll downloaded by the wizard.
-        // Piper's onnxruntime.dll (1.16.x) has DirectML provider initialization
-        // that hangs on load. The official Microsoft CPU package (1.19.2) is clean.
-        let ort_dylib = crate::binaries_dir()
-            .join("parakeet")
-            .join("onnxruntime.dll");
-
-        eprintln!("[STT] ort dylib:   {:?} (exists: {})", ort_dylib, ort_dylib.exists());
+        // download-binaries links ORT 1.24.2 statically — no LoadLibrary, no DLL version
+        // mismatch, no DirectML DllMain. Configure CPU-only at environment level so ORT
+        // never attempts to probe or load GPU providers.
         eprintln!("[STT] model path:  {:?} (exists: {})", model_path, model_path.exists());
         eprintln!("[STT] tokens path: {:?} (exists: {})", tokens_path, tokens_path.exists());
+        eprintln!("[STT] init ORT environment (CPU only, static ORT 1.24.2)...");
 
-        if ort_dylib.exists() {
-            eprintln!("[STT] loading ORT 1.19.2 CPU-only DLL...");
-            ort::init_from(&ort_dylib)
-                .map_err(|e| anyhow::anyhow!("ort init_from: {e}"))?
-                .commit();
-            eprintln!("[STT] ORT DLL loaded successfully");
-        } else {
-            anyhow::bail!(
-                "onnxruntime.dll not found at {:?} — run the wizard to download tools first",
-                ort_dylib
-            );
-        }
+        ort::init()
+            .with_execution_providers([CPUExecutionProvider::default().build()])
+            .commit();
 
         eprintln!("[STT] calling Session::builder...");
         let session = Session::builder()
