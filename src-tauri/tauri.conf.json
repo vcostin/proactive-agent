@@ -33,8 +33,6 @@
       "icons/icon.ico",
       "icons/icon.icns"
     ],
-    "externalBin": [
-      "../binaries/parakeet/parakeet-server"
-    ]
+    "externalBin": []
   }
 }

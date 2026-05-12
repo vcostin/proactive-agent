@@ -54,6 +54,8 @@ export function SetupWizard({ status, onComplete }: Props) {
     setError(null);
     try {
       await invoke('download_required_models');
+      // Initialise the in-process ort STT session now that the model is downloaded
+      await invoke('init_stt_client').catch(() => {}); // non-fatal if model not ready yet
       setStep('chat');
     } catch (e) {
       setError(String(e));

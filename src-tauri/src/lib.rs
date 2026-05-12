@@ -28,6 +28,9 @@ pub type SharedVoiceStop = Arc<std::sync::Mutex<Option<Arc<std::sync::atomic::At
 pub type SharedProcessPids = Arc<std::sync::Mutex<Vec<u32>>>;
 /// Live microphone energy (RMS as f32 bits) — updated by the capture thread, read by UI.
 pub type SharedAudioEnergy = Arc<std::sync::atomic::AtomicU32>;
+/// Shared STT client — Arc so it can be cloned into spawn_blocking closures.
+/// None if the ONNX model hasn't been downloaded yet (wizard will create it).
+pub type SharedSttClient = Arc<std::sync::Mutex<Option<Arc<audio::stt::SttClient>>>>;
 
 pub fn run() {
     tauri::Builder::default()
@@ -56,6 +59,29 @@ pub fn run() {
             let process_pids: SharedProcessPids = Arc::new(std::sync::Mutex::new(Vec::new()));
             let audio_energy: SharedAudioEnergy = Arc::new(std::sync::atomic::AtomicU32::new(0));
 
+            // STT client — load if model is already present (returning user).
+            // First-run: wizard downloads model, then re-initialises via init_stt_client command.
+            let stt_client: SharedSttClient = {
+                use crate::constants::{STT_MODEL_FILE, STT_TOKENS_FILE};
+                let model_path  = AppConfig::stt_model_dir().join(STT_MODEL_FILE);
+                let tokens_path = AppConfig::stt_model_dir().join(STT_TOKENS_FILE);
+                let inner = if model_path.exists() && tokens_path.exists() {
+                    match audio::stt::SttClient::new(&model_path, &tokens_path) {
+                        Ok(c) => {
+                            monitor::push_event(&new_event_log(), "[STT]", "ort session loaded");
+                            Some(Arc::new(c))
+                        }
+                        Err(e) => {
+                            eprintln!("[STT] failed to load ort session: {e}");
+                            None
+                        }
+                    }
+                } else {
+                    None // model not yet downloaded — wizard will trigger init_stt_client
+                };
+                Arc::new(std::sync::Mutex::new(inner))
+            };
+
             app.manage(config.clone());
             app.manage(orchestrator.clone());
             app.manage(scheduler.clone());
@@ -64,6 +90,7 @@ pub fn run() {
             app.manage(voice_stop.clone());
             app.manage(process_pids.clone());
             app.manage(audio_energy.clone());
+            app.manage(stt_client.clone());
 
             spawn_sidecars(config.clone(), event_log.clone(), chat_child.clone(), process_pids.clone());
 
@@ -138,6 +165,7 @@ pub fn run() {
             commands::get_setup_status,
             commands::check_binaries_ready,
             commands::download_required_binaries,
+            commands::init_stt_client,
             commands::check_system_deps,
             commands::install_vcredist,
             #[cfg(debug_assertions)] commands::open_llama_diagnostic,

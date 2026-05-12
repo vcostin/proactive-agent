@@ -2,7 +2,7 @@ import { listen } from '@tauri-apps/api/event';
 import { useEffect, useState } from 'react';
 import { SidecarHealthEvent } from '../../types';
 
-const SIDECARS = ['llama', 'embed', 'parakeet'];
+const SIDECARS = ['llama', 'embed']; // parakeet removed — STT now runs in-process via ort
 
 export function SidecarHealth() {
   const [health, setHealth] = useState<Record<string, SidecarHealthEvent>>({});

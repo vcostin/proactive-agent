@@ -10,7 +10,7 @@ use tauri_plugin_dialog::DialogExt;
 use crate::monitor::{AudioState, MemoryStats, ModelInfo, SystemStatus};
 use crate::orchestrator::context::AssembledContext;
 use crate::monitor::SharedEventLog;
-use crate::{SharedAudioEnergy, SharedChatChild, SharedConfig, SharedOrchestrator, SharedProcessPids, SharedScheduler, SharedVoiceStop};
+use crate::{SharedAudioEnergy, SharedChatChild, SharedConfig, SharedOrchestrator, SharedProcessPids, SharedScheduler, SharedSttClient, SharedVoiceStop};
 
 type CmdResult<T> = Result<T, String>;
 
@@ -220,11 +220,34 @@ pub async fn speak_text(
 /// Start microphone capture and STT loop.
 /// cpal::Stream is !Send on WASAPI so we keep it on a dedicated std::thread.
 /// Transcripts arrive as `voice_transcript` Tauri events.
+/// (Re-)initialise the ort STT session after the wizard downloads the model.
+/// Also called automatically at startup if the model is already present.
+#[tauri::command]
+pub async fn init_stt_client(stt_client: State<'_, SharedSttClient>) -> CmdResult<()> {
+    use crate::constants::{STT_MODEL_FILE, STT_TOKENS_FILE};
+    use crate::config::AppConfig;
+
+    let model_path  = AppConfig::stt_model_dir().join(STT_MODEL_FILE);
+    let tokens_path = AppConfig::stt_model_dir().join(STT_TOKENS_FILE);
+
+    if !model_path.exists() || !tokens_path.exists() {
+        return Err("STT model files not found — run the wizard to download them".to_string());
+    }
+
+    let client = crate::audio::stt::SttClient::new(&model_path, &tokens_path)
+        .map_err(to_cmd_err)?;
+
+    if let Ok(mut guard) = stt_client.inner().lock() {
+        *guard = Some(Arc::new(client));
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn start_voice_input(
-    config: State<'_, SharedConfig>,
     voice_stop: State<'_, SharedVoiceStop>,
     audio_energy: State<'_, SharedAudioEnergy>,
+    stt_client: State<'_, SharedSttClient>,
     app_handle: tauri::AppHandle,
 ) -> CmdResult<()> {
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -282,8 +305,13 @@ pub async fn start_voice_input(
         .recv_timeout(std::time::Duration::from_secs(3))
         .unwrap_or((16000, 1));
 
-    let stt_port = config.read().await.stt_port;
-    tauri::async_runtime::spawn(crate::audio::run_stt_loop(rx, stt_port, sample_rate, channels, app_handle));
+    // Get the STT client — returns error if model hasn't been downloaded yet
+    let client = stt_client.inner().lock()
+        .map_err(|_| "STT client mutex poisoned".to_string())?
+        .clone()
+        .ok_or_else(|| "STT model not ready — complete the setup wizard first".to_string())?;
+
+    tauri::async_runtime::spawn(crate::audio::run_stt_loop(rx, client, sample_rate, channels, app_handle));
 
     Ok(())
 }

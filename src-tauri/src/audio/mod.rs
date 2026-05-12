@@ -126,7 +126,7 @@ pub fn start_capture() -> Result<(VoiceHandle, mpsc::Receiver<Vec<f32>>)> {
 /// Exits when the audio channel closes (i.e. VoiceHandle is dropped).
 pub async fn run_stt_loop(
     mut audio_rx: mpsc::Receiver<Vec<f32>>,
-    stt_port: u16,
+    stt_client: std::sync::Arc<SttClient>,
     sample_rate: u32,
     channels: u16,
     app_handle: tauri::AppHandle,
@@ -136,7 +136,7 @@ pub async fn run_stt_loop(
         crate::constants::STT_SAMPLE_RATE
     ));
 
-    let stt = SttClient::new(stt_port);
+    let stt = stt_client;
     let mut buffer: Vec<f32> = Vec::new();
     let mut frames_received: u64 = 0;
     let mut last_frame_log = std::time::Instant::now();
@@ -176,21 +176,25 @@ pub async fn run_stt_loop(
                         ));
                     }
 
-                    let out_rate = if resampled_ok {
-                        crate::constants::STT_SAMPLE_RATE
-                    } else {
-                        sample_rate
-                    };
+                    if !resampled_ok {
+                        debug_event(&app_handle, format!(
+                            "rubato failed for {sample_rate}→{} Hz — using native rate",
+                            crate::constants::STT_SAMPLE_RATE
+                        ));
+                    }
 
                     let boosted = amplify(&prepared, MIC_GAIN);
-                    match stt.transcribe(&boosted, out_rate, 1).await {
-                        Ok(text) => {
+                    let stt_ref = stt.clone();
+                    let app2 = app_handle.clone();
+                    match tokio::task::spawn_blocking(move || stt_ref.transcribe(&boosted)).await {
+                        Ok(Ok(text)) => {
                             let cleaned = clean_transcript(&text);
                             if !cleaned.is_empty() {
-                                let _ = app_handle.emit("voice_transcript", cleaned);
+                                let _ = app2.emit("voice_transcript", cleaned);
                             }
                         }
-                        Err(e) => debug_event(&app_handle, format!("STT transcribe error: {e}")),
+                        Ok(Err(e)) => debug_event(&app_handle, format!("STT error: {e}")),
+                        Err(e)     => debug_event(&app_handle, format!("STT task panic: {e}")),
                     }
                     buffer.clear();
                 }
