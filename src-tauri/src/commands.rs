@@ -267,10 +267,18 @@ pub async fn init_stt_client(
 
     // spawn_blocking: SttClient::new loads onnxruntime.dll via native code —
     // running it on the async executor risks blocking or crashing the thread pool.
-    crate::monitor::emit_debug_event(&app_handle, &log, "[STT]", "loading ort session…").await;
-    match tokio::task::spawn_blocking(move || {
-        crate::audio::stt::SttClient::new(&model_path, &tokens_path)
-    }).await {
+    crate::monitor::emit_debug_event(&app_handle, &log, "[STT]",
+        "loading ort session on dedicated OS thread…").await;
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::Builder::new()
+        .name("ort-init".into())
+        .spawn(move || {
+            let _ = tx.send(crate::audio::stt::SttClient::new(&model_path, &tokens_path));
+        })
+        .map_err(to_cmd_err)?;
+
+    match rx.recv_timeout(std::time::Duration::from_secs(30)) {
         Ok(Ok(client)) => {
             if let Ok(mut g) = stt_ref.lock() { *g = Some(Arc::new(client)); }
             crate::monitor::emit_debug_event(&handle, &log, "[STT]", "ort session ready — CPU").await;
@@ -282,7 +290,7 @@ pub async fn init_stt_client(
             Err(msg)
         }
         Err(e) => {
-            let msg = format!("ort task panicked: {e}");
+            let msg = format!("ort init timed out or thread died: {e}");
             crate::monitor::emit_debug_event(&handle, &log, "[STT]", &msg).await;
             Err(msg)
         }

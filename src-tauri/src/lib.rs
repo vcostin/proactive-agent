@@ -91,10 +91,22 @@ pub fn run() {
                         "model not downloaded yet — wizard will initialise").await;
                     return;
                 }
-                monitor::emit_debug_event(&handle_stt, &log_stt, "[STT]", "loading ort session…").await;
-                match tokio::task::spawn_blocking(move || {
-                    audio::stt::SttClient::new(&model_path, &tokens_path)
-                }).await {
+                monitor::emit_debug_event(&handle_stt, &log_stt, "[STT]",
+                    "loading ort session on dedicated OS thread…").await;
+
+                // Use std::thread::spawn NOT spawn_blocking — LoadLibrary deadlocks
+                // inside tokio's thread pool on Windows due to loader-lock interactions
+                // with Tauri's COM/message loop. A fresh OS thread avoids this.
+                let (tx, rx) = std::sync::mpsc::channel();
+                std::thread::Builder::new()
+                    .name("ort-init".into())
+                    .spawn(move || {
+                        let _ = tx.send(audio::stt::SttClient::new(&model_path, &tokens_path));
+                    })
+                    .expect("failed to spawn ort-init thread");
+
+                // Wait up to 30s — first load compiles ONNX graph which can be slow
+                match rx.recv_timeout(std::time::Duration::from_secs(30)) {
                     Ok(Ok(client)) => {
                         if let Ok(mut g) = stt_bg.lock() { *g = Some(Arc::new(client)); }
                         monitor::emit_debug_event(&handle_stt, &log_stt, "[STT]", "ort session ready — CPU").await;
@@ -103,9 +115,14 @@ pub fn run() {
                         monitor::emit_debug_event(&handle_stt, &log_stt, "[STT]",
                             format!("ort session failed: {e}")).await;
                     }
-                    Err(e) => {
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                         monitor::emit_debug_event(&handle_stt, &log_stt, "[STT]",
-                            format!("ort task panicked: {e}")).await;
+                            "ort init timed out after 30s — LoadLibrary still hanging. \
+                             onnxruntime.dll may have GPU provider init issues on this system.").await;
+                    }
+                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                        monitor::emit_debug_event(&handle_stt, &log_stt, "[STT]",
+                            "ort-init thread exited unexpectedly").await;
                     }
                 }
             });
