@@ -36,6 +36,7 @@ export function SetupWizard({ status, onComplete }: Props) {
 
   const handleDownloadTools = async () => {
     setDownloading(true);
+    setProgress({});  // reset so stale done:true doesn't hide new bars
     setError(null);
     try {
       await invoke('download_required_binaries');
@@ -51,6 +52,7 @@ export function SetupWizard({ status, onComplete }: Props) {
 
   const handleDownloadModels = async () => {
     setDownloading(true);
+    setProgress({});  // reset so stale done:true doesn't hide new bars
     setError(null);
     try {
       await invoke('download_required_models');
@@ -209,10 +211,10 @@ function ToolsStep({ binaries, progress, downloading, error, onDownload, onSkip 
                 {t.ready ? '✓ ready' : t.size}
               </span>
             </div>
-            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: (p && !p.done) || (downloading && !t.ready && !p) ? 6 : 0 }}>
+            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: (p && !p.done) || (downloading && !t.ready && (!p || p.done)) ? 6 : 0 }}>
               {t.desc}
             </div>
-            {downloading && !t.ready && !p && (
+            {downloading && !t.ready && (!p || p.done) && (
               <ProgressBar downloaded={0} total={0} pct={0} />
             )}
             {p && !p.done && <ProgressBar downloaded={p.downloaded} total={p.total} pct={pct} />}
@@ -295,11 +297,11 @@ function ModelsStep({ status, deps, onDepsChange, progress, downloading, error, 
                 {m.ready ? '✓ ready' : m.size}
               </span>
             </div>
-            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: (p && !p.done) || (downloading && !m.ready && !p) ? 6 : 0 }}>
+            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: (p && !p.done) || (downloading && !m.ready && (!p || p.done)) ? 6 : 0 }}>
               {m.desc}
             </div>
             {/* Show indeterminate bar immediately on download start — before first chunk arrives */}
-            {downloading && !m.ready && !p && (
+            {downloading && !m.ready && (!p || p.done) && (
               <ProgressBar downloaded={0} total={0} pct={0} />
             )}
             {p && !p.done && <ProgressBar downloaded={p.downloaded} total={p.total} pct={pct} />}
