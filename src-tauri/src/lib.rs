@@ -333,7 +333,7 @@ pub fn find_sidecar(name: &str) -> Option<PathBuf> {
     let root = binaries_dir();
     let short = name.split('-').next().unwrap_or(name);
 
-    // Release: also check exe directory for installer-bundled binaries (e.g. parakeet)
+    // Release: also check exe directory for any future installer-bundled binaries
     #[cfg(not(debug_assertions))]
     let exe_candidates: Vec<PathBuf> = std::env::current_exe().ok()
         .and_then(|exe| exe.parent().map(|d| d.to_path_buf()))
@@ -457,9 +457,8 @@ fn spawn_sidecars(config: SharedConfig, event_log: SharedEventLog, chat_child: S
         let chat_model     = cfg.chat_model.clone();
         let embed_path     = cfg.embed_model_path().to_string_lossy().into_owned();
         let cfg_models_dir = cfg.models_dir.clone();
-        let embed_port     = cfg.embed_port;
-        let _stt_port      = cfg.stt_port; // port is hardcoded in parakeet-server binary
-        let llama_port     = cfg.llama_port;
+        let embed_port = cfg.embed_port;
+        let llama_port = cfg.llama_port;
         drop(cfg);
 
         if chat_model.is_empty() {
@@ -479,10 +478,8 @@ fn spawn_sidecars(config: SharedConfig, event_log: SharedEventLog, chat_child: S
                  "--alias".into(), "nomic-embed-text".into()],
             event_log.clone(), pids.clone());
 
-        // Parakeet TDT STT server — listens on port 5092, loads model from HF cache
-        spawn_direct("parakeet-server", "Parakeet STT",
-            vec![],   // server uses hardcoded host/port from app.py
-            event_log.clone(), pids.clone());
+        // STT runs in-process via ort (no sidecar process needed).
+        // The ort session is initialised separately in the background task above.
 
         // TTS uses Piper as a subprocess per request — no persistent server needed.
         let tts_model = cfg_models_dir.join("tts").join(constants::TTS_MODEL_FILE);
