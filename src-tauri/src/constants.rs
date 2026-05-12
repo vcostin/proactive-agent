@@ -13,6 +13,12 @@ pub const SIDECAR_HOST: &str = "127.0.0.1";
 
 // ── Audio ─────────────────────────────────────────────────────────────────────
 
+/// ONNX Runtime CPU-only DLL for ort rc.12.
+/// Microsoft's official CPU package — no DirectML/GPU dependencies.
+/// ORT 1.19.2 implements API version 18+ which satisfies ort rc.12's minimum of 17.
+pub const ORT_CPU_DLL_URL: &str =
+    "https://github.com/microsoft/onnxruntime/releases/download/v1.19.2/onnxruntime-win-x64-1.19.2.zip";
+
 /// Target sample rate for STT input. Parakeet TDT (and Whisper) were trained
 /// on 16 kHz mono audio — sending the native device rate and relying on the
 /// server to resample gives lower quality than doing it ourselves with rubato.

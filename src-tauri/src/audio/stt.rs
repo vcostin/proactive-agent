@@ -49,26 +49,28 @@ impl SttClient {
     pub fn new(model_path: &Path, tokens_path: &Path) -> Result<Self> {
         use ort::execution_providers::CPUExecutionProvider;
 
-        // Load onnxruntime.dll from piper's directory — we already distribute it
-        // with Piper, so no extra file to ship. ort needs the path at init time
-        // when using the load-dynamic feature.
+        // Use the dedicated CPU-only onnxruntime.dll downloaded by the wizard.
+        // Piper's onnxruntime.dll (1.16.x) has DirectML provider initialization
+        // that hangs on load. The official Microsoft CPU package (1.19.2) is clean.
         let ort_dylib = crate::binaries_dir()
-            .join("piper")
+            .join("parakeet")
             .join("onnxruntime.dll");
 
-        eprintln!("[STT] ort dylib path: {:?} (exists: {})", ort_dylib, ort_dylib.exists());
-        eprintln!("[STT] model path:     {:?} (exists: {})", model_path, model_path.exists());
-        eprintln!("[STT] tokens path:    {:?} (exists: {})", tokens_path, tokens_path.exists());
+        eprintln!("[STT] ort dylib:   {:?} (exists: {})", ort_dylib, ort_dylib.exists());
+        eprintln!("[STT] model path:  {:?} (exists: {})", model_path, model_path.exists());
+        eprintln!("[STT] tokens path: {:?} (exists: {})", tokens_path, tokens_path.exists());
 
         if ort_dylib.exists() {
-            eprintln!("[STT] calling ort::init_from...");
+            eprintln!("[STT] loading ORT 1.19.2 CPU-only DLL...");
             ort::init_from(&ort_dylib)
-                .map_err(|e| anyhow::anyhow!("ort init_from({:?}): {e}", ort_dylib))?
+                .map_err(|e| anyhow::anyhow!("ort init_from: {e}"))?
                 .commit();
-            eprintln!("[STT] ort::init_from succeeded");
+            eprintln!("[STT] ORT DLL loaded successfully");
         } else {
-            eprintln!("[STT] ort dylib NOT FOUND — falling back to PATH search");
-            ort::init().commit();
+            anyhow::bail!(
+                "onnxruntime.dll not found at {:?} — run the wizard to download tools first",
+                ort_dylib
+            );
         }
 
         eprintln!("[STT] calling Session::builder...");

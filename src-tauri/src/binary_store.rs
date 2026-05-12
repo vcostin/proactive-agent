@@ -102,6 +102,12 @@ pub async fn download_all(app: &tauri::AppHandle) -> Result<()> {
         emit_done(app, "piper", "already present");
     }
 
+    // Download the correct onnxruntime.dll for ort rc.12 — Microsoft's official
+    // CPU-only build. Piper ships ORT 1.16 which hangs on load (DirectML
+    // provider mismatch). The CPU-only package has no DirectML dependency.
+    download_ort_dylib(&client, app).await
+        .context("failed to download onnxruntime")?;
+
     Ok(())
 }
 
@@ -365,6 +371,46 @@ fn make_executable(path: &Path) -> Result<()> {
     perms.set_mode(perms.mode() | 0o755);
     std::fs::set_permissions(path, perms)?;
     Ok(())
+}
+
+// ── onnxruntime CPU-only DLL ──────────────────────────────────────────────────
+
+/// Download the official Microsoft ONNX Runtime CPU-only DLL for ort rc.12.
+/// Stored in binaries/parakeet/ so SttClient::new() can find it via init_from().
+/// Windows only — macOS/Linux use system ORT or the ort download path.
+#[cfg(target_os = "windows")]
+async fn download_ort_dylib(client: &Client, app: &tauri::AppHandle) -> Result<()> {
+    let dest_dir = crate::binaries_dir().join("parakeet");
+    std::fs::create_dir_all(&dest_dir)?;
+    let dll_dest = dest_dir.join("onnxruntime.dll");
+    let shared_dest = dest_dir.join("onnxruntime_providers_shared.dll");
+
+    if dll_dest.exists() && dll_dest.metadata().map(|m| m.len()).unwrap_or(0) > 1_000_000 {
+        emit_done(app, "onnxruntime", "already present");
+        return Ok(());
+    }
+
+    let data = fetch_with_progress(client, app, "onnxruntime", crate::constants::ORT_CPU_DLL_URL).await?;
+    let cursor = std::io::Cursor::new(&data);
+    let mut archive = zip::ZipArchive::new(cursor)?;
+    for i in 0..archive.len() {
+        let mut entry = archive.by_index(i)?;
+        let name = entry.name().to_lowercase();
+        if name.ends_with("onnxruntime.dll") {
+            let mut out = std::fs::File::create(&dll_dest)?;
+            std::io::copy(&mut entry, &mut out)?;
+        } else if name.ends_with("onnxruntime_providers_shared.dll") {
+            let mut out = std::fs::File::create(&shared_dest)?;
+            std::io::copy(&mut entry, &mut out)?;
+        }
+    }
+    emit_done(app, "onnxruntime", "CPU-only 1.19.2 installed");
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+async fn download_ort_dylib(_client: &Client, _app: &tauri::AppHandle) -> Result<()> {
+    Ok(()) // macOS/Linux: handled differently
 }
 
 fn emit_done(app: &tauri::AppHandle, label: &str, msg: &str) {
