@@ -43,10 +43,30 @@ pub const STT_MODEL_FILE: &str = "parakeet-tdt-0.6b-v3.onnx";
 /// Parakeet STT vocabulary/tokens file alongside the ONNX model.
 pub const STT_TOKENS_FILE: &str = "parakeet-tdt-0.6b-v3-tokens.txt";
 
-// ── Download URLs ─────────────────────────────────────────────────────────────
+// ── Download URLs — pinned releases ──────────────────────────────────────────
+// Pinned to specific versions to avoid GitHub API rate limits (60 req/hr).
+// Update these constants when upgrading a component.
+
+/// llama.cpp release tag — CPU server + Vulkan DLLs.
+pub const LLAMA_VERSION: &str = "b9095";
+pub const LLAMA_CPU_URL_WIN: &str =
+    "https://github.com/ggerganov/llama.cpp/releases/download/b9095/llama-b9095-bin-win-cpu-x64.zip";
+pub const LLAMA_VULKAN_URL_WIN: &str =
+    "https://github.com/ggerganov/llama.cpp/releases/download/b9095/llama-b9095-bin-win-vulkan-x64.zip";
+pub const LLAMA_CPU_URL_MAC_ARM: &str =
+    "https://github.com/ggerganov/llama.cpp/releases/download/b9095/llama-b9095-bin-macos-arm64.zip";
+pub const LLAMA_CPU_URL_LINUX: &str =
+    "https://github.com/ggerganov/llama.cpp/releases/download/b9095/llama-b9095-bin-ubuntu-x64.zip";
+
+/// Piper TTS — includes onnxruntime.dll, DLLs, espeak-ng-data.
+pub const PIPER_URL_WIN: &str =
+    "https://github.com/rhasspy/piper/releases/download/2023.11.14-2/piper_windows_amd64.zip";
+pub const PIPER_URL_MAC_ARM: &str =
+    "https://github.com/rhasspy/piper/releases/download/2023.11.14-2/piper_macos_aarch64.tar.gz";
+pub const PIPER_URL_LINUX: &str =
+    "https://github.com/rhasspy/piper/releases/download/2023.11.14-2/piper_linux_x86_64.tar.gz";
 
 /// nomic-embed-text GGUF download from HuggingFace.
-/// Update EMBED_MODEL_FILE when changing this URL.
 pub const EMBED_MODEL_URL: &str =
     "https://huggingface.co/nomic-ai/nomic-embed-text-v1.5-GGUF/resolve/main/nomic-embed-text-v1.5.Q8_0.gguf";
 
@@ -59,7 +79,6 @@ pub const STT_TOKENS_URL: &str =
     "https://huggingface.co/groxaxo/parakeet-tdt-0.6b-v3-fastapi-openai/resolve/main/parakeet-tdt-0.6b-v3-tokens.txt";
 
 /// Visual C++ Redistributable 2022 x64 silent installer from Microsoft.
-/// TODO: pin to a specific versioned URL and update VCREDIST_SHA256 when bumping.
 pub const VCREDIST_URL: &str = "https://aka.ms/vs/17/release/vc_redist.x64.exe";
 
 /// SHA256 of the VCRedist installer. Intentionally a placeholder —

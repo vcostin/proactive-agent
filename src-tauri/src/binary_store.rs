@@ -114,28 +114,27 @@ pub async fn download_all(app: &tauri::AppHandle) -> Result<()> {
 // ── llama-server ──────────────────────────────────────────────────────────────
 
 async fn download_llama(client: &Client, app: &tauri::AppHandle) -> Result<()> {
+    use crate::constants::*;
     let llama_dir = crate::binaries_dir().join("llama");
     std::fs::create_dir_all(&llama_dir)?;
 
-    let release = github_latest(client, "ggerganov/llama.cpp").await?;
-    let tag = release["tag_name"].as_str().unwrap_or("unknown").to_string();
-
-    // Step 1: GPU DLLs (Windows only — Vulkan backend)
-    // Uses "llama-server" as the progress key so the wizard progress bar matches.
+    // Pinned URLs — no GitHub API calls, no rate limits.
+    // Step 1: Vulkan DLLs (Windows only)
     #[cfg(target_os = "windows")]
-    if let Some(gpu_pat) = platform::LLAMA_GPU_PAT {
-        if let Some(url) = find_asset(&release, gpu_pat) {
-            let data = fetch_with_progress(client, app, "llama-server", &url).await?;
-            extract_zip_dlls(&data, &llama_dir)
-                .context("extracting Vulkan DLLs")?;
-        }
+    {
+        let data = fetch_with_progress(client, app, "llama-server", LLAMA_VULKAN_URL_WIN).await?;
+        extract_zip_dlls(&data, &llama_dir).context("extracting Vulkan DLLs")?;
     }
 
-    // Step 2: CPU server binary (has full HTTP API)
-    let cpu_url = find_asset(&release, platform::LLAMA_CPU_PAT)
-        .with_context(|| format!("no llama.cpp CPU asset matching '{}' in release {tag}", platform::LLAMA_CPU_PAT))?;
+    // Step 2: CPU server binary
+    #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+    let cpu_url = LLAMA_CPU_URL_WIN;
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    let cpu_url = LLAMA_CPU_URL_MAC_ARM;
+    #[cfg(target_os = "linux")]
+    let cpu_url = LLAMA_CPU_URL_LINUX;
 
-    let data = fetch_with_progress(client, app, "llama-server", &cpu_url).await?;
+    let data = fetch_with_progress(client, app, "llama-server", cpu_url).await?;
     let dest_name = format!("llama-server-{}", platform::TRIPLE);
     #[cfg(target_os = "windows")]
     let dest_name = format!("{dest_name}.exe");
@@ -146,23 +145,26 @@ async fn download_llama(client: &Client, app: &tauri::AppHandle) -> Result<()> {
     #[cfg(not(target_os = "windows"))]
     make_executable(&llama_dir.join(&dest_name))?;
 
-    emit_done(app, "llama-server", &format!("installed ({tag})"));
+    emit_done(app, "llama-server", &format!("installed ({})", LLAMA_VERSION));
     Ok(())
 }
 
 // ── piper ─────────────────────────────────────────────────────────────────────
 
 async fn download_piper(client: &Client, app: &tauri::AppHandle) -> Result<()> {
+    use crate::constants::*;
     let piper_dir = crate::binaries_dir().join("piper");
     std::fs::create_dir_all(&piper_dir)?;
 
-    let release = github_latest(client, "rhasspy/piper").await?;
-    let tag = release["tag_name"].as_str().unwrap_or("unknown").to_string();
+    // Pinned URL — no GitHub API call needed.
+    #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+    let url = PIPER_URL_WIN;
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    let url = PIPER_URL_MAC_ARM;
+    #[cfg(target_os = "linux")]
+    let url = PIPER_URL_LINUX;
 
-    let url = find_asset(&release, platform::PIPER_PAT)
-        .with_context(|| format!("no piper asset matching '{}' in release {tag}", platform::PIPER_PAT))?;
-
-    let data = fetch_with_progress(client, app, "piper", &url).await?;
+    let data = fetch_with_progress(client, app, "piper", url).await?;
 
     let dest_name = format!("piper-{}", platform::TRIPLE);
     #[cfg(target_os = "windows")]
@@ -179,7 +181,7 @@ async fn download_piper(client: &Client, app: &tauri::AppHandle) -> Result<()> {
     #[cfg(not(target_os = "windows"))]
     make_executable(&piper_dir.join(&dest_name))?;
 
-    emit_done(app, "piper", &format!("installed ({tag})"));
+    emit_done(app, "piper", "installed (2023.11.14-2)");
     Ok(())
 }
 
