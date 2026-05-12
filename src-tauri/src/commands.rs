@@ -335,7 +335,10 @@ pub async fn start_voice_input(
                     }
                     debug_event_sync(&app_for_thread, "capture stopped".to_string());
                 }
-                Err(e) => debug_event_sync(&app_for_thread, format!("capture failed: {e}")),
+                Err(e) => {
+                    // cfg_tx is dropped here — the recv_timeout will get Disconnected
+                    debug_event_sync(&app_for_thread, format!("AudioCapture::start FAILED: {e:#}"));
+                }
             }
         });
 
@@ -353,8 +356,22 @@ pub async fn start_voice_input(
 
     // Wait briefly for the capture thread to report its actual sample rate/channels
     let (sample_rate, channels) = match cfg_rx.recv_timeout(std::time::Duration::from_secs(3)) {
-        Ok(v) => { debug_event_sync(&app_handle, format!("device config received: {}Hz {}ch", v.0, v.1)); v }
-        Err(_) => { debug_event_sync(&app_handle, "device config timeout — capture may have failed".to_string()); (16000, 1) }
+        Ok(v) => {
+            debug_event_sync(&app_handle, format!("device config received: {}Hz {}ch", v.0, v.1));
+            v
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            let msg = "device config TIMEOUT — audio capture started but never sent config. \
+                       Capture likely failed silently (check cpal/WASAPI). Falling back to 16kHz mono.";
+            debug_event_sync(&app_handle, msg.to_string());
+            (16000, 1)
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            let msg = "device config channel DISCONNECTED — capture thread exited before sending config. \
+                       This means AudioCapture::start() returned an error.";
+            debug_event_sync(&app_handle, msg.to_string());
+            return Err(msg.to_string());
+        }
     };
 
     // Get the STT client — returns error if model hasn't been downloaded yet
