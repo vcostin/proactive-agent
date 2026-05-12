@@ -59,28 +59,11 @@ pub fn run() {
             let process_pids: SharedProcessPids = Arc::new(std::sync::Mutex::new(Vec::new()));
             let audio_energy: SharedAudioEnergy = Arc::new(std::sync::atomic::AtomicU32::new(0));
 
-            // STT client — load if model is already present (returning user).
-            // First-run: wizard downloads model, then re-initialises via init_stt_client command.
-            let stt_client: SharedSttClient = {
-                use crate::constants::{STT_MODEL_FILE, STT_TOKENS_FILE};
-                let model_path  = AppConfig::stt_model_dir().join(STT_MODEL_FILE);
-                let tokens_path = AppConfig::stt_model_dir().join(STT_TOKENS_FILE);
-                let inner = if model_path.exists() && tokens_path.exists() {
-                    match audio::stt::SttClient::new(&model_path, &tokens_path) {
-                        Ok(c) => {
-                            monitor::push_event(&new_event_log(), "[STT]", "ort session loaded");
-                            Some(Arc::new(c))
-                        }
-                        Err(e) => {
-                            eprintln!("[STT] failed to load ort session: {e}");
-                            None
-                        }
-                    }
-                } else {
-                    None // model not yet downloaded — wizard will trigger init_stt_client
-                };
-                Arc::new(std::sync::Mutex::new(inner))
-            };
+            // STT client — initialised lazily in the background after startup.
+            // Loading onnxruntime.dll can crash if the DLL is wrong version;
+            // doing it in a spawn_blocking keeps the window responsive and
+            // lets the error surface in the debug log rather than a process crash.
+            let stt_client: SharedSttClient = Arc::new(std::sync::Mutex::new(None));
 
             app.manage(config.clone());
             app.manage(orchestrator.clone());
@@ -93,6 +76,39 @@ pub fn run() {
             app.manage(stt_client.clone());
 
             spawn_sidecars(config.clone(), event_log.clone(), chat_child.clone(), process_pids.clone());
+
+            // Load STT ort session in background — isolated from setup hook so
+            // a DLL crash or version mismatch doesn't kill the window.
+            let stt_bg = stt_client.clone();
+            let log_stt = event_log.clone();
+            let handle_stt = app_handle.clone();
+            tauri::async_runtime::spawn(async move {
+                use crate::constants::{STT_MODEL_FILE, STT_TOKENS_FILE};
+                let model_path  = AppConfig::stt_model_dir().join(STT_MODEL_FILE);
+                let tokens_path = AppConfig::stt_model_dir().join(STT_TOKENS_FILE);
+                if !model_path.exists() || !tokens_path.exists() {
+                    monitor::emit_debug_event(&handle_stt, &log_stt, "[STT]",
+                        "model not downloaded yet — wizard will initialise").await;
+                    return;
+                }
+                monitor::emit_debug_event(&handle_stt, &log_stt, "[STT]", "loading ort session…").await;
+                match tokio::task::spawn_blocking(move || {
+                    audio::stt::SttClient::new(&model_path, &tokens_path)
+                }).await {
+                    Ok(Ok(client)) => {
+                        if let Ok(mut g) = stt_bg.lock() { *g = Some(Arc::new(client)); }
+                        monitor::emit_debug_event(&handle_stt, &log_stt, "[STT]", "ort session ready — CPU").await;
+                    }
+                    Ok(Err(e)) => {
+                        monitor::emit_debug_event(&handle_stt, &log_stt, "[STT]",
+                            format!("ort session failed: {e}")).await;
+                    }
+                    Err(e) => {
+                        monitor::emit_debug_event(&handle_stt, &log_stt, "[STT]",
+                            format!("ort task panicked: {e}")).await;
+                    }
+                }
+            });
 
             // Run requirements check at every startup and emit the result so the
             // frontend can show a fix prompt even when the wizard is already done.
