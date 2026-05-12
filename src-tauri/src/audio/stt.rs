@@ -49,6 +49,22 @@ impl SttClient {
     pub fn new(model_path: &Path, tokens_path: &Path) -> Result<Self> {
         use ort::execution_providers::CPUExecutionProvider;
 
+        // Load onnxruntime.dll from piper's directory — we already distribute it
+        // with Piper, so no extra file to ship. ort needs the path at init time
+        // when using the load-dynamic feature.
+        let ort_dylib = crate::binaries_dir()
+            .join("piper")
+            .join("onnxruntime.dll");
+
+        if ort_dylib.exists() {
+            ort::init_from(&ort_dylib)
+                .map_err(|e| anyhow::anyhow!("ort init_from: {e}"))?
+                .commit();
+        } else {
+            // Fallback: let ort search PATH
+            ort::init().commit();
+        }
+
         let session = Session::builder()
             .map_err(|e| anyhow::anyhow!("ort builder: {e}"))?
             .with_execution_providers([CPUExecutionProvider::default().build()])
@@ -58,7 +74,8 @@ impl SttClient {
             .commit_from_file(model_path)
             .context("failed to load Parakeet ONNX model")?;
 
-        eprintln!("[STT] Parakeet ONNX session loaded — CPU only");
+        eprintln!("[STT] Parakeet ONNX session loaded — CPU only, dylib: {:?}",
+            crate::binaries_dir().join("piper").join("onnxruntime.dll"));
 
         let vocab: Vec<String> = std::fs::read_to_string(tokens_path)
             .context("failed to load tokens.txt vocabulary")?
