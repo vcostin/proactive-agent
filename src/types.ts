@@ -3,9 +3,8 @@
 export interface BinariesStatus {
   llama_ready: boolean;
   piper_ready: boolean;
-  /** Always false until manually provided — no public release URL */
-  parakeet_ready: boolean;
-  parakeet_note: string;
+  // parakeet_ready / parakeet_note removed — parakeet-server.exe no longer
+  // needed since STT runs in-process via ort using the ONNX model file
 }
 
 export interface SetupStatus {

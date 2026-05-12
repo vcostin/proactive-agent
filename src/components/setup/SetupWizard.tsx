@@ -174,22 +174,15 @@ function ToolsStep({ binaries, progress, downloading, error, onDownload, onSkip 
     {
       key: 'piper',
       label: 'Piper TTS',
-      desc: 'Text-to-speech — offline neural voice synthesis',
+      desc: 'Text-to-speech + onnxruntime.dll (also used by STT)',
       size: '~5 MB',
       ready: binaries.piper_ready,
     },
-    {
-      key: 'parakeet-server',
-      label: 'Parakeet STT',
-      desc: binaries.parakeet_note,
-      size: '~48 MB',
-      ready: binaries.parakeet_ready,
-      manual: true,
-    },
+    // Parakeet server binary removed — STT now runs in-process via ort.
+    // The ONNX model files are downloaded in Step 2 (models).
   ];
 
-  const autoTools = tools.filter(t => !t.manual);
-  const allAutoReady = autoTools.every(t => t.ready);
+  const allAutoReady = tools.every(t => t.ready);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -201,19 +194,18 @@ function ToolsStep({ binaries, progress, downloading, error, onDownload, onSkip 
       {tools.map(t => {
         const p = progress[t.key] ?? progress[`${t.key}.zip`];
         const pct = p && p.total > 0 ? Math.round((p.downloaded / p.total) * 100) : 0;
-        const borderColor = t.ready ? 'var(--success)' : t.manual ? 'var(--border)' : 'var(--border)';
+        const borderColor = t.ready ? 'var(--success)' : 'var(--border)';
 
         return (
           <div key={t.key} style={{
             padding: '10px 12px', background: 'var(--bg)',
             border: `1px solid ${borderColor}`,
             borderRadius: 'var(--radius)',
-            opacity: t.manual && !t.ready ? 0.6 : 1,
           }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
               <span style={{ fontWeight: 500, fontSize: 12 }}>{t.label}</span>
               <span style={{ fontSize: 11, color: t.ready ? 'var(--success)' : 'var(--text-muted)' }}>
-                {t.ready ? '✓ ready' : t.manual ? 'manual step' : t.size}
+                {t.ready ? '✓ ready' : t.size}
               </span>
             </div>
             <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: p && !p.done ? 6 : 0 }}>

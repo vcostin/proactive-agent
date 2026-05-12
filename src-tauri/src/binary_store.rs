@@ -65,21 +65,16 @@ mod platform {
 
 #[derive(serde::Serialize, Clone)]
 pub struct BinariesStatus {
-    pub llama_ready:    bool,
-    pub piper_ready:    bool,
-    /// Always false until the user manually provides it — see ROADMAP § Needs Decision
-    pub parakeet_ready: bool,
-    /// Human-readable note shown in the wizard for parakeet
-    pub parakeet_note:  String,
+    pub llama_ready: bool,
+    pub piper_ready: bool,
+    // parakeet_ready removed — parakeet-server.exe no longer used.
+    // STT runs in-process via ort; ONNX model files downloaded in Step 2.
 }
 
 pub fn check_binaries() -> BinariesStatus {
     BinariesStatus {
-        llama_ready:    crate::find_sidecar("llama-server").is_some(),
-        piper_ready:    crate::find_sidecar("piper").is_some(),
-        parakeet_ready: crate::find_sidecar("parakeet-server").is_some(),
-        parakeet_note:  "Speech-to-text requires a manual build step. \
-                         See ROADMAP for options.".into(),
+        llama_ready: crate::find_sidecar("llama-server").is_some(),
+        piper_ready: crate::find_sidecar("piper").is_some(),
     }
 }
 
