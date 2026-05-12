@@ -280,17 +280,19 @@ pub async fn init_stt_client(
 
     match rx.recv_timeout(std::time::Duration::from_secs(30)) {
         Ok(Ok(client)) => {
-            if let Ok(mut g) = stt_ref.lock() { *g = Some(Arc::new(client)); }
+            if let Ok(mut g) = stt_ref.lock() { *g = Some(Ok(Arc::new(client))); }
             crate::monitor::emit_debug_event(&handle, &log, "[STT]", "ort session ready — CPU").await;
             Ok(())
         }
         Ok(Err(e)) => {
             let msg = format!("ort session failed: {e}");
+            if let Ok(mut g) = stt_ref.lock() { *g = Some(Err(msg.clone())); }
             crate::monitor::emit_debug_event(&handle, &log, "[STT]", &msg).await;
             Err(msg)
         }
         Err(e) => {
             let msg = format!("ort init timed out or thread died: {e}");
+            if let Ok(mut g) = stt_ref.lock() { *g = Some(Err(msg.clone())); }
             crate::monitor::emit_debug_event(&handle, &log, "[STT]", &msg).await;
             Err(msg)
         }
@@ -382,16 +384,21 @@ pub async fn start_voice_input(
         }
     };
 
-    // Get the STT client — returns error if model hasn't been downloaded yet
     let client = {
         let guard = stt_client.inner().lock()
             .map_err(|_| "STT client mutex poisoned".to_string())?;
         match guard.clone() {
-            Some(c) => c,
             None => {
-                let msg = "STT model not ready — complete Step 2 of the wizard first";
+                let msg = "STT not initialised yet — model may still be downloading";
                 debug_event_sync(&app_handle, msg.to_string());
                 return Err(msg.to_string());
+            }
+            Some(Ok(c)) => c,
+            Some(Err(e)) => {
+                // e is the actual error from SttClient::new — finally visible
+                let msg = format!("STT init failed: {e}");
+                debug_event_sync(&app_handle, msg.clone());
+                return Err(msg);
             }
         }
     };

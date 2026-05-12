@@ -28,9 +28,8 @@ pub type SharedVoiceStop = Arc<std::sync::Mutex<Option<Arc<std::sync::atomic::At
 pub type SharedProcessPids = Arc<std::sync::Mutex<Vec<u32>>>;
 /// Live microphone energy (RMS as f32 bits) — updated by the capture thread, read by UI.
 pub type SharedAudioEnergy = Arc<std::sync::atomic::AtomicU32>;
-/// Shared STT client — Arc so it can be cloned into spawn_blocking closures.
-/// None if the ONNX model hasn't been downloaded yet (wizard will create it).
-pub type SharedSttClient = Arc<std::sync::Mutex<Option<Arc<audio::stt::SttClient>>>>;
+/// STT client state — Ok(client) when ready, Err(reason) when init failed, None when not yet attempted.
+pub type SharedSttClient = Arc<std::sync::Mutex<Option<Result<Arc<audio::stt::SttClient>, String>>>>;
 
 pub fn run() {
     tauri::Builder::default()
@@ -106,25 +105,22 @@ pub fn run() {
                     .expect("failed to spawn ort-init thread");
 
                 // Wait up to 30s — first load compiles ONNX graph which can be slow
-                match rx.recv_timeout(std::time::Duration::from_secs(30)) {
-                    Ok(Ok(client)) => {
-                        if let Ok(mut g) = stt_bg.lock() { *g = Some(Arc::new(client)); }
-                        monitor::emit_debug_event(&handle_stt, &log_stt, "[STT]", "ort session ready — CPU").await;
-                    }
-                    Ok(Err(e)) => {
-                        monitor::emit_debug_event(&handle_stt, &log_stt, "[STT]",
-                            format!("ort session failed: {e}")).await;
-                    }
-                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                        monitor::emit_debug_event(&handle_stt, &log_stt, "[STT]",
-                            "ort init timed out after 30s — LoadLibrary still hanging. \
-                             onnxruntime.dll may have GPU provider init issues on this system.").await;
-                    }
-                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                        monitor::emit_debug_event(&handle_stt, &log_stt, "[STT]",
-                            "ort-init thread exited unexpectedly").await;
-                    }
-                }
+                let result: Result<Arc<audio::stt::SttClient>, String> =
+                    match rx.recv_timeout(std::time::Duration::from_secs(30)) {
+                        Ok(Ok(client)) => Ok(Arc::new(client)),
+                        Ok(Err(e))     => Err(format!("ort session failed: {e}")),
+                        Err(std::sync::mpsc::RecvTimeoutError::Timeout) =>
+                            Err("ort LoadLibrary timed out after 30s".to_string()),
+                        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) =>
+                            Err("ort-init thread exited unexpectedly".to_string()),
+                    };
+
+                let msg = match &result {
+                    Ok(_)    => "ort session ready — CPU".to_string(),
+                    Err(e)   => format!("STT init error: {e}"),
+                };
+                monitor::emit_debug_event(&handle_stt, &log_stt, "[STT]", &msg).await;
+                if let Ok(mut g) = stt_bg.lock() { *g = Some(result); }
             });
 
             // Run requirements check at every startup and emit the result so the
