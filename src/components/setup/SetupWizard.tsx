@@ -60,10 +60,15 @@ export function SetupWizard({ status, onComplete }: Props) {
     setError(null);
     try {
       await invoke('download_required_models');
-      // Initialise ort STT session with the freshly downloaded model
-      await invoke('init_stt_client').catch(() => {});
-      // Ensure sidecars are running (covers first-run where tools were already present)
+      // Ensure sidecars are running before advancing
       await invoke('start_sidecars').catch(() => {});
+      // Initialise ort STT session — show error if it fails so the user knows
+      try {
+        await invoke('init_stt_client');
+      } catch (e) {
+        // Non-fatal: user can still chat without voice, but show what happened
+        setError(`Voice input unavailable: ${e}. You can continue without it.`);
+      }
       setStep('chat');
     } catch (e) {
       setError(String(e));

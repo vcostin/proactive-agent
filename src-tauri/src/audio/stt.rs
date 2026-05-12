@@ -56,15 +56,22 @@ impl SttClient {
             .join("piper")
             .join("onnxruntime.dll");
 
+        eprintln!("[STT] ort dylib path: {:?} (exists: {})", ort_dylib, ort_dylib.exists());
+        eprintln!("[STT] model path:     {:?} (exists: {})", model_path, model_path.exists());
+        eprintln!("[STT] tokens path:    {:?} (exists: {})", tokens_path, tokens_path.exists());
+
         if ort_dylib.exists() {
+            eprintln!("[STT] calling ort::init_from...");
             ort::init_from(&ort_dylib)
-                .map_err(|e| anyhow::anyhow!("ort init_from: {e}"))?
+                .map_err(|e| anyhow::anyhow!("ort init_from({:?}): {e}", ort_dylib))?
                 .commit();
+            eprintln!("[STT] ort::init_from succeeded");
         } else {
-            // Fallback: let ort search PATH
+            eprintln!("[STT] ort dylib NOT FOUND — falling back to PATH search");
             ort::init().commit();
         }
 
+        eprintln!("[STT] calling Session::builder...");
         let session = Session::builder()
             .map_err(|e| anyhow::anyhow!("ort builder: {e}"))?
             .with_execution_providers([CPUExecutionProvider::default().build()])
@@ -74,8 +81,7 @@ impl SttClient {
             .commit_from_file(model_path)
             .context("failed to load Parakeet ONNX model")?;
 
-        eprintln!("[STT] Parakeet ONNX session loaded — CPU only, dylib: {:?}",
-            crate::binaries_dir().join("piper").join("onnxruntime.dll"));
+        eprintln!("[STT] Session loaded successfully");
 
         let vocab: Vec<String> = std::fs::read_to_string(tokens_path)
             .context("failed to load tokens.txt vocabulary")?
