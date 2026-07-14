@@ -5569,6 +5569,7 @@ dependencies = [
  "flate2",
  "futures",
  "lancedb",
+ "libc",
  "protoc-bin-vendored",
  "regex",
  "reqwest 0.12.28",

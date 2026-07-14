@@ -165,55 +165,109 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error building tauri application")
         .run(|app_handle, event| {
-            if let tauri::RunEvent::Exit = event {
-                kill_all_sidecars(app_handle);
+            // Kill early on ExitRequested (before tear-down). Exit alone can be too
+            // late, and async-spawned `kill` kids often die with the app before running.
+            match event {
+                tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit => {
+                    kill_all_sidecars(app_handle);
+                }
+                tauri::RunEvent::WindowEvent { event, .. } => {
+                    if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
+                        kill_all_sidecars(app_handle);
+                    }
+                }
+                _ => {}
             }
         });
 }
 
-/// Kill every tracked sidecar process so DLLs are released and ports freed.
-/// Called on app exit — ensures `npm run setup` works without closing manually.
+/// Kill every tracked sidecar (and its process group on Unix) so ports/VRAM are freed.
 fn kill_all_sidecars(app_handle: &tauri::AppHandle) {
     use tauri::Manager;
 
-    // Kill chat server via stored child handle
+    let mut seen = std::collections::HashSet::new();
+
     if let Some(pids) = app_handle.try_state::<SharedProcessPids>() {
         if let Ok(list) = pids.inner().lock() {
             for &pid in list.iter() {
-                if pid == 0 { continue; }
-                #[cfg(target_os = "windows")]
-                {
-                    // /F = force, /T = kill child tree
-                    let _ = std::process::Command::new("taskkill")
-                        .args(["/F", "/T", "/PID", &pid.to_string()])
-                        .spawn();
+                if pid == 0 || !seen.insert(pid) {
+                    continue;
                 }
-                #[cfg(not(target_os = "windows"))]
-                {
-                    let _ = std::process::Command::new("kill")
-                        .args(["-9", &pid.to_string()])
-                        .spawn();
-                }
+                kill_process_tree(pid);
             }
         }
     }
 
-    // Also kill the chat server via its stored child handle
     if let Some(chat) = app_handle.try_state::<SharedChatChild>() {
         if let Ok(mut guard) = chat.inner().try_lock() {
-            if let Some(ref mut child) = *guard {
+            if let Some(mut child) = guard.take() {
                 if let Some(pid) = child.id() {
-                    #[cfg(target_os = "windows")]
-                    let _ = std::process::Command::new("taskkill")
-                        .args(["/F", "/T", "/PID", &pid.to_string()])
-                        .spawn();
-                    #[cfg(not(target_os = "windows"))]
-                    let _ = std::process::Command::new("kill")
-                        .args(["-9", &pid.to_string()])
-                        .spawn();
+                    if seen.insert(pid) {
+                        kill_process_tree(pid);
+                    }
                 }
+                let _ = child.start_kill();
             }
         }
+    }
+
+    // Safety net: free known sidecar ports even if PID tracking missed a fork/exec.
+    // Reads config when available; falls back to defaults.
+    let (chat_port, embed_port, stt_port) = app_handle
+        .try_state::<SharedConfig>()
+        .and_then(|cfg| cfg.inner().try_read().ok().map(|c| (c.llama_port, c.embed_port, c.stt_port)))
+        .unwrap_or((18080, 18081, 5092));
+    for port in [chat_port, embed_port, stt_port] {
+        kill_listeners_on_port(port);
+    }
+}
+
+/// Synchronously kill `pid` and (on Unix) its process group.
+fn kill_process_tree(pid: u32) {
+    #[cfg(target_os = "windows")]
+    {
+        let _ = std::process::Command::new("taskkill")
+            .args(["/F", "/T", "/PID", &pid.to_string()])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+    }
+    #[cfg(unix)]
+    {
+        // Negative PGID → entire group (set via process_group(0) at spawn).
+        let pgid = pid as i32;
+        unsafe {
+            libc::kill(-pgid, libc::SIGTERM);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        unsafe {
+            libc::kill(-pgid, libc::SIGKILL);
+            libc::kill(pgid, libc::SIGKILL);
+        }
+    }
+}
+
+/// Best-effort: terminate whoever is listening on `port` (Linux/macOS).
+fn kill_listeners_on_port(port: u16) {
+    #[cfg(target_os = "windows")]
+    {
+        // Prefer tracked PIDs; port resolution via netstat is brittle here.
+        let _ = port;
+    }
+    #[cfg(unix)]
+    {
+        // fuser is common on Arch; ignore failures if missing.
+        let _ = std::process::Command::new("fuser")
+            .args(["-k", "-TERM", &format!("{port}/tcp")])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        let _ = std::process::Command::new("fuser")
+            .args(["-k", "-KILL", &format!("{port}/tcp")])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
     }
 }
 
@@ -341,6 +395,12 @@ fn make_cmd(binary: &PathBuf, bin_dir: &PathBuf) -> tokio::process::Command {
     cmd.current_dir(bin_dir);
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::piped());
+
+    // Own process group so exit can SIGKILL the whole tree (uvicorn workers, etc.).
+    #[cfg(unix)]
+    {
+        cmd.process_group(0);
+    }
 
     #[cfg(target_os = "windows")]
     {

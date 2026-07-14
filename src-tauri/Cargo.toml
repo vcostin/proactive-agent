@@ -41,6 +41,7 @@ rubato = "0.16"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 flate2 = "1"
 tar = "0.4"
+libc = "0.2"
 
 [package.metadata.bundle]
 identifier = "com.proactive.agent"
