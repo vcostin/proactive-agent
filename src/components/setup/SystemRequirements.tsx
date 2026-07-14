@@ -103,65 +103,72 @@ export function SystemRequirements({ onChange }: Props) {
 
         {state === 'done' && deps && (
           <>
-            {/* Visual C++ Runtime */}
-            {/* Show install/update whenever llama-server is failing — VCRedist may
-                be installed but outdated (missing newer exported functions). */}
-            <Row
-              ok={deps.vcredist_ok && deps.llama_server_ok}
-              label="Visual C++ Runtime 2022"
-              okNote="installed"
-              failNote={deps.vcredist_ok
-                ? 'installed but outdated — needs update'
-                : 'not installed — required for llama-server'}
-              action={!deps.llama_server_ok && !installing && !installDone ? (
-                <button
-                  className="primary"
-                  onClick={handleInstallVCRedist}
-                  style={{ fontSize: 11, padding: '2px 10px' }}
-                >
-                  {deps.vcredist_ok ? 'update (~7 MB)' : 'install (~7 MB)'}
-                </button>
-              ) : undefined}
-            />
+            {/* Visual C++ — Windows only (hidden on Linux/macOS) */}
+            {deps.platform === 'windows' && (
+              <>
+                <Row
+                  ok={deps.vcredist_ok && deps.llama_server_ok}
+                  label="Visual C++ Runtime 2022"
+                  okNote="installed"
+                  failNote={deps.vcredist_ok
+                    ? 'installed but outdated — needs update'
+                    : 'not installed — required for llama-server'}
+                  action={!deps.llama_server_ok && !installing && !installDone ? (
+                    <button
+                      className="primary"
+                      onClick={handleInstallVCRedist}
+                      style={{ fontSize: 11, padding: '2px 10px' }}
+                    >
+                      {deps.vcredist_ok ? 'update (~7 MB)' : 'install (~7 MB)'}
+                    </button>
+                  ) : undefined}
+                />
 
-            {/* Install progress */}
-            {installing && (
-              <div style={{ marginTop: -4 }}>
-                <div style={{ height: 3, background: '#222', borderRadius: 2, overflow: 'hidden' }}>
-                  <div style={{
-                    height: '100%',
-                    width: `${installProgress}%`,
-                    background: 'var(--accent)',
-                    transition: 'width 0.2s',
-                  }} />
-                </div>
-                <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 3 }}>
-                  {installProgress < 100
-                    ? `downloading… ${installProgress}%`
-                    : 'installing silently…'}
-                </div>
-              </div>
-            )}
-            {installDone && (
-              <div style={{ fontSize: 11, color: 'var(--success)', marginTop: -4 }}>
-                ✓ installed — re-checking…
-              </div>
-            )}
-            {installError && (
-              <div style={{ fontSize: 11, color: 'var(--error)', marginTop: -4 }}>
-                {installError}
-              </div>
+                {installing && (
+                  <div style={{ marginTop: -4 }}>
+                    <div style={{ height: 3, background: '#222', borderRadius: 2, overflow: 'hidden' }}>
+                      <div style={{
+                        height: '100%',
+                        width: `${installProgress}%`,
+                        background: 'var(--accent)',
+                        transition: 'width 0.2s',
+                      }} />
+                    </div>
+                    <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 3 }}>
+                      {installProgress < 100
+                        ? `downloading… ${installProgress}%`
+                        : 'installing silently…'}
+                    </div>
+                  </div>
+                )}
+                {installDone && (
+                  <div style={{ fontSize: 11, color: 'var(--success)', marginTop: -4 }}>
+                    ✓ installed — re-checking…
+                  </div>
+                )}
+                {installError && (
+                  <div style={{ fontSize: 11, color: 'var(--error)', marginTop: -4 }}>
+                    {installError}
+                  </div>
+                )}
+              </>
             )}
 
-            {/* Vulkan */}
+            {/* GPU backend — Vulkan on Win/Linux, Metal path on macOS */}
             <Row
               ok={deps.vulkan_ok}
-              label="Vulkan Runtime"
+              label={deps.platform === 'macos' ? 'Metal / GPU' : 'Vulkan Runtime'}
               okNote="detected"
-              failNote="not found — update your GPU drivers (AMD/Nvidia)"
+              failNote={
+                deps.platform === 'macos'
+                  ? 'GPU stack not detected'
+                  : deps.platform === 'windows'
+                    ? 'not found — update GPU drivers (AMD / Nvidia / Intel)'
+                    : 'not found — install mesa-vulkan-drivers / amdvlk / nvidia drivers'
+              }
             />
 
-            {/* llama-server test */}
+            {/* llama-server test — all platforms */}
             <Row
               ok={deps.llama_server_ok}
               label="llama-server binary"
@@ -171,7 +178,9 @@ export function SystemRequirements({ onChange }: Props) {
                 <button
                   onClick={async () => { await invoke('open_llama_diagnostic'); }}
                   style={{ fontSize: 10, padding: '1px 8px', flexShrink: 0 }}
-                  title="Open a terminal window — Windows will show the exact missing DLL name"
+                  title={deps.platform === 'windows'
+                    ? 'Open a console — Windows shows the missing DLL name'
+                    : 'Open a terminal and run llama-server --version'}
                 >
                   show error →
                 </button>

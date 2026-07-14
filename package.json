@@ -8,8 +8,11 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "setup": "pwsh -File scripts/fetch-sidecars-windows.ps1",
-    "setup:mac": "bash scripts/fetch-sidecars-macos.sh"
+    "setup": "deno run -A scripts/setup.ts",
+    "setup:linux": "bash scripts/fetch-sidecars-linux.sh",
+    "setup:mac": "bash scripts/fetch-sidecars-macos.sh",
+    "setup:windows": "pwsh -File scripts/fetch-sidecars-windows.ps1",
+    "parakeet:linux": "bash scripts/run-parakeet-linux.sh"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

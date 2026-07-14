@@ -30,15 +30,44 @@ impl TtsClient {
         )).await;
         let tmp = std::env::temp_dir().join("proactive_tts.wav");
 
-        // Piper reads text from stdin, writes WAV to --output_file
-        let mut child = tokio::process::Command::new(&binary)
-            .args(["--model", model.to_str().unwrap_or(""),
+        // Piper reads text from stdin, writes WAV to --output_file.
+        // Run from piper/ so relative libs (and espeak-ng-data) resolve on all OSes.
+        let piper_dir = binary.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| binary.clone());
+        let mut cmd = tokio::process::Command::new(&binary);
+        cmd.args(["--model", model.to_str().unwrap_or(""),
                    "--output_file", tmp.to_str().unwrap_or(""),
                    "--sentence_silence", "0.1"])
+            .current_dir(&piper_dir)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()?;
+            .stderr(std::process::Stdio::null());
+        #[cfg(target_os = "windows")]
+        {
+            // Exe dir is searched for DLLs; also prepend PATH for any helper tools
+            let current = std::env::var("PATH").unwrap_or_default();
+            cmd.env("PATH", format!("{};{}", piper_dir.display(), current));
+        }
+        #[cfg(target_os = "linux")]
+        {
+            let current = std::env::var("LD_LIBRARY_PATH").unwrap_or_default();
+            let path = if current.is_empty() {
+                piper_dir.display().to_string()
+            } else {
+                format!("{}:{}", piper_dir.display(), current)
+            };
+            cmd.env("LD_LIBRARY_PATH", path);
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let current = std::env::var("DYLD_LIBRARY_PATH").unwrap_or_default();
+            let path = if current.is_empty() {
+                piper_dir.display().to_string()
+            } else {
+                format!("{}:{}", piper_dir.display(), current)
+            };
+            cmd.env("DYLD_LIBRARY_PATH", path);
+        }
+        let mut child = cmd.spawn()?;
 
         if let Some(mut stdin) = child.stdin.take() {
             use tokio::io::AsyncWriteExt;
@@ -79,7 +108,7 @@ fn find_piper() -> Result<std::path::PathBuf> {
     }
 
     Err(anyhow::anyhow!(
-        "piper not found. Tried binaries/piper/. Run: npm run setup"
+        "piper not found. Tried binaries/piper/. Run: deno task setup"
     ))
 }
 
@@ -97,7 +126,7 @@ fn find_tts_model() -> Result<std::path::PathBuf> {
     candidates.into_iter()
         .find(|p| p.exists())
         .ok_or_else(|| anyhow::anyhow!(
-            "piper voice model not found — run: npm run setup"
+            "piper voice model not found — run: deno task setup"
         ))
 }
 

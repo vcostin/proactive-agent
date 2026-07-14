@@ -31,9 +31,23 @@ export function ChatWindow({ modelName, onModelClick }: Props) {
         setListening(true);
       } catch (e) {
         setMicError(String(e));
+        setListening(false);
       }
     }
   }, [listening]);
+
+  // Surface mid-session STT failures (e.g. Parakeet crashed after mic started)
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    import('@tauri-apps/api/event').then(({ listen }) => {
+      listen<string>('voice_error', e => {
+        setMicError(e.payload);
+        setListening(false);
+        invoke('stop_voice_input').catch(() => {});
+      }).then(fn => { unlisten = fn; });
+    });
+    return () => { unlisten?.(); };
+  }, []);
   const bottomRef = useRef<HTMLDivElement>(null);
   const mountedRef = useRef(false);
 
@@ -152,6 +166,26 @@ export function ChatWindow({ modelName, onModelClick }: Props) {
             flexShrink: 0,
           }} />
           Loading model — you can type, your message will send when ready
+        </div>
+      )}
+
+      {/* ── Mic / STT error banner ── */}
+      {micError && (
+        <div style={{
+          display: 'flex', alignItems: 'flex-start', gap: 10,
+          padding: '8px 16px',
+          background: 'rgba(224, 85, 85, 0.08)',
+          borderBottom: '1px solid var(--error)',
+          fontSize: 12, color: 'var(--error)',
+          flexShrink: 0,
+        }}>
+          <span style={{ flex: 1 }}>{micError}</span>
+          <button
+            onClick={() => setMicError(null)}
+            style={{ fontSize: 11, padding: '1px 8px', flexShrink: 0 }}
+          >
+            dismiss
+          </button>
         </div>
       )}
 

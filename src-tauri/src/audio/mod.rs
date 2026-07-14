@@ -188,9 +188,17 @@ pub async fn run_stt_loop(
                             let cleaned = clean_transcript(&text);
                             if !cleaned.is_empty() {
                                 let _ = app_handle.emit("voice_transcript", cleaned);
+                            } else if !text.trim().is_empty() {
+                                debug_event(&app_handle, format!(
+                                    "STT discarded as hallucination/noise: {text:?}"
+                                ));
                             }
                         }
-                        Err(e) => debug_event(&app_handle, format!("STT transcribe error: {e}")),
+                        Err(e) => {
+                            let msg = format!("STT transcribe error: {e}");
+                            debug_event(&app_handle, msg.clone());
+                            let _ = app_handle.emit("voice_error", msg);
+                        }
                     }
                     buffer.clear();
                 }

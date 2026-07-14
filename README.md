@@ -18,13 +18,26 @@ Runs on your machine — no cloud, no telemetry, no API keys required.
 
 | Component | Minimum | Recommended |
 |-----------|---------|-------------|
-| OS | Windows 10 x64 | Windows 11 x64 |
+| OS | Linux x86_64 / Windows 10 x64 | Arch / Windows 11 |
 | RAM | 16 GB | 32 GB+ |
 | GPU | Any (CPU fallback) | Vulkan-capable with 8 GB+ VRAM |
 | Disk | 15 GB free | 30 GB free |
-| Runtime | VCRedist 2015–2022 | (auto-installed on first run) |
+| JS toolchain | **Deno 2+** (preferred) or Node 20+ | Deno |
 
-> macOS (Apple Silicon) is supported in principle — see [macOS setup](#macos) below.
+> Voice input (Parakeet) is Windows-oriented for now — Linux bring-up covers chat, memory, proactivity, and Piper TTS. Mic STT lands with the in-process `ort` migration.
+
+---
+
+## Quick start (Linux / Deno)
+
+```bash
+deno install                 # installs npm deps into node_modules/
+deno task setup              # llama-server, piper, embed + TTS models
+# drop a chat .gguf into models/
+deno task tauri dev
+```
+
+Node is still supported: `npm install && npm run setup && npm run tauri -- dev`.
 
 ---
 
@@ -42,22 +55,22 @@ Runs on your machine — no cloud, no telemetry, no API keys required.
 ### Prerequisites
 
 - [Rust](https://rustup.rs/) (stable, 1.77+)
-- [Node.js](https://nodejs.org/) 20+
-- [Tauri CLI prerequisites](https://tauri.app/start/prerequisites/) (WebView2 on Windows)
+- [Deno](https://deno.com/) 2+ **or** [Node.js](https://nodejs.org/) 20+
+- [Tauri CLI prerequisites](https://tauri.app/start/prerequisites/) (WebKitGTK 4.1 on Linux, WebView2 on Windows)
 
 ### Install
 
 ```bash
 git clone <repo>
-cd proactive-ai
-npm install
-npm run setup          # downloads llama-server, piper binaries + DLLs into binaries/
+cd proactive-agent
+deno install                 # or: npm install
+deno task setup              # OS-detecting; or setup:linux / setup:mac / setup:windows
 ```
 
 ### Run in dev mode
 
 ```bash
-npm run tauri dev
+deno task tauri dev          # or: npm run tauri -- dev
 ```
 
 The app opens with the setup wizard on first run. Pick a model, let it download, start chatting.
@@ -65,9 +78,9 @@ The app opens with the setup wizard on first run. Pick a model, let it download,
 ### Build installer
 
 ```bash
-npm run tauri build
-# → src-tauri/target/release/bundle/msi/proactive-agent_0.1.0_x64_en-US.msi
-# → src-tauri/target/release/bundle/nsis/proactive-agent_0.1.0_x64-setup.exe
+deno task tauri build
+# Linux → src-tauri/target/release/bundle/...
+# Windows → msi / nsis under the same path
 ```
 
 ---
@@ -158,6 +171,17 @@ Script exists at `scripts/fetch-sidecars-macos.sh` but is untested.
 Piper has an `aarch64` build; Parakeet STT needs a macOS PyInstaller rebuild.
 See `ROADMAP.md` for current status.
 
+## Platform support
+
+| | Windows | Linux | macOS |
+|--|---------|-------|-------|
+| Setup | `deno task setup` / `setup:windows` | `deno task setup` | `deno task setup` / `setup:mac` |
+| GPU | Vulkan + VCRedist check | Vulkan | Metal (no Vulkan row) |
+| STT (Parakeet) | Sidecar when present | Skip until ort migration | Rebuild needed |
+| TTS (Piper) | Yes | Yes | Yes |
+
+System requirements adapt per OS: VCRedist is Windows-only; llama-server is probed on all three.
+
 ---
 
 ## Project layout
@@ -188,9 +212,10 @@ proactive-ai/
 │   ├── nomic-embed-text-v1.5.Q8_0.gguf
 │   └── tts/              en_US-lessac-medium.onnx + .json
 ├── scripts/
-│   ├── fetch-sidecars-windows.ps1
-│   └── fetch-sidecars-macos.sh
-├── ARCHITECTURE.md       Technical architecture and component alternatives
-├── ROADMAP.md            What's done, what's remaining, what needs a decision
-└── WORK_LOG.md           Per-session implementation notes and bug history
-```
+│   ├── setup.sh                      # OS dispatcher (deno/npm task setup)
+│   ├── run-frontend.sh               # Prefer Deno, fall back to npm
+│   ├── fetch-sidecars-linux.sh
+│   ├── fetch-sidecars-macos.sh
+│   └── fetch-sidecars-windows.ps1
+├── deno.json             Deno tasks (preferred JS toolchain)
+├── package.json          npm-compatible scripts (still supported)```

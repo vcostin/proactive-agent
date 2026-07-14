@@ -26,39 +26,45 @@ mod platform {
     pub const LLAMA_EXE:        &str = "llama-server.exe";
     pub const PIPER_EXE:        &str = "piper.exe";
     pub const PIPER_IS_TARGZ:   bool = false;
+    pub const LLAMA_IS_TARGZ:   bool = false;
 }
 
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 mod platform {
     pub const TRIPLE:           &str = "aarch64-apple-darwin";
-    pub const LLAMA_CPU_PAT:    &str = "bin-macos-arm64.zip";
+    // Prefer .tar.gz; find_asset matches substring so older .zip still works.
+    pub const LLAMA_CPU_PAT:    &str = "bin-macos-arm64";
     pub const LLAMA_GPU_PAT:    Option<&str> = None; // Metal built-in to llama
     pub const PIPER_PAT:        &str = "piper_macos_aarch64.tar.gz";
     pub const LLAMA_EXE:        &str = "llama-server";
     pub const PIPER_EXE:        &str = "piper";
     pub const PIPER_IS_TARGZ:   bool = true;
+    pub const LLAMA_IS_TARGZ:   bool = true;
 }
 
 #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
 mod platform {
     pub const TRIPLE:           &str = "x86_64-apple-darwin";
-    pub const LLAMA_CPU_PAT:    &str = "bin-macos-x64.zip";
+    pub const LLAMA_CPU_PAT:    &str = "bin-macos-x64";
     pub const LLAMA_GPU_PAT:    Option<&str> = None;
     pub const PIPER_PAT:        &str = "piper_macos_x86_64.tar.gz";
     pub const LLAMA_EXE:        &str = "llama-server";
     pub const PIPER_EXE:        &str = "piper";
     pub const PIPER_IS_TARGZ:   bool = true;
+    pub const LLAMA_IS_TARGZ:   bool = true;
 }
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 mod platform {
     pub const TRIPLE:           &str = "x86_64-unknown-linux-gnu";
-    pub const LLAMA_CPU_PAT:    &str = "bin-ubuntu-x64.zip";
-    pub const LLAMA_GPU_PAT:    Option<&str> = None;
+    // Current ggml-org releases ship Ubuntu archives as .tar.gz (not .zip).
+    pub const LLAMA_CPU_PAT:    &str = "bin-ubuntu-x64.tar.gz";
+    pub const LLAMA_GPU_PAT:    Option<&str> = Some("bin-ubuntu-vulkan-x64.tar.gz");
     pub const PIPER_PAT:        &str = "piper_linux_x86_64.tar.gz";
     pub const LLAMA_EXE:        &str = "llama-server";
     pub const PIPER_EXE:        &str = "piper";
     pub const PIPER_IS_TARGZ:   bool = true;
+    pub const LLAMA_IS_TARGZ:   bool = true;
 }
 
 // ── Public status ─────────────────────────────────────────────────────────────
@@ -116,30 +122,45 @@ async fn download_llama(client: &Client, app: &tauri::AppHandle) -> Result<()> {
     let llama_dir = crate::binaries_dir().join("llama");
     std::fs::create_dir_all(&llama_dir)?;
 
-    let release = github_latest(client, "ggerganov/llama.cpp").await?;
+    // Prefer ggml-org; ggerganov still redirects but org moved.
+    let release = match github_latest(client, "ggml-org/llama.cpp").await {
+        Ok(r) => r,
+        Err(_) => github_latest(client, "ggerganov/llama.cpp").await?,
+    };
     let tag = release["tag_name"].as_str().unwrap_or("unknown").to_string();
 
-    // Step 1: GPU DLLs (Windows only — Vulkan backend)
-    #[cfg(target_os = "windows")]
+    // Step 1: GPU backend libs (Windows DLLs / Linux .so from Vulkan archive)
     if let Some(gpu_pat) = platform::LLAMA_GPU_PAT {
         if let Some(url) = find_asset(&release, gpu_pat) {
-            let data = fetch_with_progress(client, app, "llama-vulkan.zip", &url).await?;
-            extract_zip_dlls(&data, &llama_dir)
-                .context("extracting Vulkan DLLs")?;
+            let label = if platform::LLAMA_IS_TARGZ { "llama-vulkan.tar.gz" } else { "llama-vulkan.zip" };
+            let data = fetch_with_progress(client, app, label, &url).await?;
+            if platform::LLAMA_IS_TARGZ {
+                extract_targz_shared_libs(&data, &llama_dir)
+                    .context("extracting Vulkan shared libs")?;
+            } else {
+                extract_zip_dlls(&data, &llama_dir)
+                    .context("extracting Vulkan DLLs")?;
+            }
         }
     }
 
-    // Step 2: CPU server binary (has full HTTP API)
+    // Step 2: CPU server binary (full HTTP API on Windows; primary binary everywhere)
     let cpu_url = find_asset(&release, platform::LLAMA_CPU_PAT)
         .with_context(|| format!("no llama.cpp CPU asset matching '{}' in release {tag}", platform::LLAMA_CPU_PAT))?;
 
-    let data = fetch_with_progress(client, app, "llama-cpu.zip", &cpu_url).await?;
+    let label = if platform::LLAMA_IS_TARGZ { "llama-cpu.tar.gz" } else { "llama-cpu.zip" };
+    let data = fetch_with_progress(client, app, label, &cpu_url).await?;
     let dest_name = format!("llama-server-{}", platform::TRIPLE);
     #[cfg(target_os = "windows")]
     let dest_name = format!("{dest_name}.exe");
 
-    extract_zip_one(&data, platform::LLAMA_EXE, &llama_dir.join(&dest_name))
-        .context("extracting llama-server binary")?;
+    if platform::LLAMA_IS_TARGZ {
+        extract_targz_one(&data, platform::LLAMA_EXE, &llama_dir.join(&dest_name))
+            .context("extracting llama-server binary")?;
+    } else {
+        extract_zip_one(&data, platform::LLAMA_EXE, &llama_dir.join(&dest_name))
+            .context("extracting llama-server binary")?;
+    }
 
     #[cfg(not(target_os = "windows"))]
     make_executable(&llama_dir.join(&dest_name))?;
@@ -169,6 +190,7 @@ async fn download_piper(client: &Client, app: &tauri::AppHandle) -> Result<()> {
     if platform::PIPER_IS_TARGZ {
         extract_targz_piper(&data, &piper_dir, &dest_name)
             .context("extracting piper from tar.gz")?;
+        ensure_soname_links(&piper_dir);
     } else {
         extract_zip_piper(&data, &piper_dir, &dest_name)
             .context("extracting piper from zip")?;
@@ -272,6 +294,75 @@ fn extract_zip_one(data: &[u8], name_contains: &str, dest: &Path) -> Result<()> 
         }
     }
     bail!("'{}' not found in zip", name_contains)
+}
+
+/// Extract a single named file from a tar.gz archive.
+fn extract_targz_one(data: &[u8], name_contains: &str, dest: &Path) -> Result<()> {
+    let cursor = std::io::Cursor::new(data);
+    let gz = flate2::read::GzDecoder::new(cursor);
+    let mut archive = tar::Archive::new(gz);
+    let needle = name_contains.to_lowercase();
+
+    for entry in archive.entries()? {
+        let mut entry = entry?;
+        let path = entry.path()?.into_owned();
+        let lower = path.to_string_lossy().to_lowercase();
+        if lower.ends_with(&needle) {
+            entry.unpack(dest)?;
+            return Ok(());
+        }
+    }
+    bail!("'{}' not found in tar.gz", name_contains)
+}
+
+/// Extract shared libraries (`.so` / `.so.*`) from a tar.gz into `dest_dir`,
+/// then synthesise common soname symlinks (`libfoo.so.0`, `libfoo.so`).
+fn extract_targz_shared_libs(data: &[u8], dest_dir: &Path) -> Result<()> {
+    let cursor = std::io::Cursor::new(data);
+    let gz = flate2::read::GzDecoder::new(cursor);
+    let mut archive = tar::Archive::new(gz);
+
+    for entry in archive.entries()? {
+        let mut entry = entry?;
+        if entry.header().entry_type().is_dir() {
+            continue;
+        }
+        let path = entry.path()?.into_owned();
+        let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let lower = name.to_lowercase();
+        if lower.contains(".so") {
+            let dest = dest_dir.join(&name);
+            entry.unpack(&dest)?;
+        }
+    }
+    ensure_soname_links(dest_dir);
+    Ok(())
+}
+
+/// Create `libfoo.so.N` / `libfoo.so` links for versioned `libfoo.so.N.M…` files.
+fn ensure_soname_links(dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_symlink() { continue; }
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else { continue };
+        if !name.starts_with("lib") || !name.contains(".so.") { continue; }
+        let Some((stem, rest)) = name.split_once(".so.") else { continue };
+        let major = rest.split('.').next().unwrap_or("0");
+        let link_major = dir.join(format!("{stem}.so.{major}"));
+        let link_plain = dir.join(format!("{stem}.so"));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            if !link_major.exists() {
+                let _ = symlink(name, &link_major);
+            }
+            if !link_plain.exists() {
+                let _ = symlink(name, &link_plain);
+            }
+        }
+        let _ = (link_major, link_plain);
+    }
 }
 
 /// Extract piper from a zip: binary, DLLs, and espeak-ng-data/.

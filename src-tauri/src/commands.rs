@@ -31,6 +31,7 @@ fn debug_event_sync(app: &tauri::AppHandle, message: String) {
 
 /// Compare the SHA256 of `data` against a lowercase hex string.
 /// Returns false if the hash doesn't match OR if `expected` is not valid 64-char hex.
+#[cfg(target_os = "windows")]
 fn verify_sha256(data: &[u8], expected_hex: &str) -> bool {
     use sha2::{Digest, Sha256};
     if expected_hex.len() != 64 { return false; }
@@ -229,6 +230,18 @@ pub async fn start_voice_input(
 ) -> CmdResult<()> {
     use std::sync::atomic::{AtomicBool, Ordering};
 
+    let stt_port = config.read().await.stt_port;
+
+    // Prefight: mic capture alone is useless without STT.
+    if !stt_reachable(stt_port).await {
+        return Err(format!(
+            "Speech-to-text is not running on port {stt_port} (Parakeet). \
+             Waveform works, but nothing will be transcribed. \
+             On Linux: run Parakeet (docker/python) on :{stt_port}, or type instead — \
+             see scripts/run-parakeet-linux.sh"
+        ));
+    }
+
     // Stop any existing recording
     if let Ok(mut g) = voice_stop.inner().lock() {
         if let Some(flag) = g.take() {
@@ -264,7 +277,9 @@ pub async fn start_voice_input(
                     }
                     debug_event_sync(&app_for_thread, "capture stopped".to_string());
                 }
-                Err(e) => eprintln!("[AUDIO] capture failed: {e}"),
+                Err(e) => {
+                    debug_event_sync(&app_for_thread, format!("capture failed: {e}"));
+                }
             }
         });
 
@@ -282,10 +297,36 @@ pub async fn start_voice_input(
         .recv_timeout(std::time::Duration::from_secs(3))
         .unwrap_or((16000, 1));
 
-    let stt_port = config.read().await.stt_port;
     tauri::async_runtime::spawn(crate::audio::run_stt_loop(rx, stt_port, sample_rate, channels, app_handle));
 
     Ok(())
+}
+
+/// Quick HTTP health probe for the Parakeet STT sidecar.
+async fn stt_reachable(port: u16) -> bool {
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_millis(800))
+        .build()
+    {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+    // Upstream health endpoints vary: /health, /healthz
+    for path in ["/healthz", "/health", "/v1/models"] {
+        let url = format!("http://{}:{}{path}", crate::SIDECAR_HOST, port);
+        if let Ok(resp) = client.get(&url).send().await {
+            if resp.status().is_success() {
+                return true;
+            }
+        }
+    }
+    // TCP connect as last resort — server up but odd routing
+    let alt = format!(
+        "http://{}:{}/v1/audio/transcriptions",
+        crate::SIDECAR_HOST,
+        port
+    );
+    matches!(client.get(&alt).send().await, Ok(r) if !r.status().is_server_error() || r.status().as_u16() == 405 || r.status().as_u16() == 422 || r.status().as_u16() == 400)
 }
 
 /// Current mic energy level (0.0–1.0) for the waveform visualiser.
@@ -315,6 +356,9 @@ pub async fn stop_voice_input(
 
 #[derive(Serialize)]
 pub struct SystemDeps {
+    /// "windows" | "linux" | "macos" — UI hides Windows-only rows on other OSes
+    pub platform: String,
+    /// Only meaningful on Windows; always true elsewhere
     pub vcredist_ok: bool,
     pub vulkan_ok: bool,
     /// Result of actually running llama-server --version
@@ -325,49 +369,125 @@ pub struct SystemDeps {
 /// Check system-level dependencies required by the sidecar binaries.
 #[tauri::command]
 pub async fn check_system_deps() -> CmdResult<SystemDeps> {
-    #[cfg(target_os = "windows")]
-    {
-        // VCRUNTIME140_1.dll ships with Visual C++ 2019/2022 runtime
-        let vcredist_ok =
-            std::path::Path::new("C:\\Windows\\System32\\VCRUNTIME140_1.dll").exists();
-        let vulkan_ok =
-            std::path::Path::new("C:\\Windows\\System32\\vulkan-1.dll").exists();
-
-        let (llama_server_ok, llama_server_msg) = test_llama_binary().await;
-        return Ok(SystemDeps { vcredist_ok, vulkan_ok, llama_server_ok, llama_server_msg });
+    let platform = if cfg!(target_os = "windows") {
+        "windows"
+    } else if cfg!(target_os = "macos") {
+        "macos"
+    } else {
+        "linux"
     }
-    #[cfg(not(target_os = "windows"))]
+    .to_string();
+
+    let vcredist_ok = {
+        #[cfg(target_os = "windows")]
+        {
+            std::path::Path::new("C:\\Windows\\System32\\VCRUNTIME140_1.dll").exists()
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            true // not applicable
+        }
+    };
+
+    let vulkan_ok = detect_vulkan();
+
+    let (llama_server_ok, llama_server_msg) = test_llama_binary().await;
+
     Ok(SystemDeps {
-        vcredist_ok: true,
-        vulkan_ok: true,
-        llama_server_ok: false,
-        llama_server_msg: "not checked on this platform".to_string(),
+        platform,
+        vcredist_ok,
+        vulkan_ok,
+        llama_server_ok,
+        llama_server_msg,
     })
 }
 
-/// Run `llama-server --version` to verify DLLs and entry points resolve correctly.
+fn detect_vulkan() -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        return std::path::Path::new("C:\\Windows\\System32\\vulkan-1.dll").exists();
+    }
+    #[cfg(target_os = "linux")]
+    {
+        // Loader SONAME — present with mesa-vulkan / amdvlk / nvidia proprietary
+        for candidate in [
+            "/usr/lib/libvulkan.so.1",
+            "/usr/lib64/libvulkan.so.1",
+            "/usr/lib/x86_64-linux-gnu/libvulkan.so.1",
+        ] {
+            if std::path::Path::new(candidate).exists() {
+                return true;
+            }
+        }
+        // Fallback: any ICD json under the standard paths
+        for dir in [
+            "/usr/share/vulkan/icd.d",
+            "/etc/vulkan/icd.d",
+            "/usr/lib/x86_64-linux-gnu/GL/vulkan/icd.d",
+        ] {
+            if let Ok(rd) = std::fs::read_dir(dir) {
+                if rd.filter_map(Result::ok).any(|e| {
+                    e.path().extension().and_then(|x| x.to_str()) == Some("json")
+                }) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        // MoltenVK / system Metal path — llama.cpp uses Metal, treat as ok
+        true
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
+    {
+        false
+    }
+}
+
+/// Run `llama-server --version` to verify libs resolve and the binary starts.
 async fn test_llama_binary() -> (bool, String) {
     let binary = match crate::find_sidecar("llama-server") {
         Some(b) => b,
-        None => return (false, "binary not found — use the Setup Wizard to download it".to_string()),
+        None => return (false, "binary not found — run: deno task setup".to_string()),
     };
-    let dll_dir = binary.parent()
+    let lib_dir = binary.parent()
         .map(|p| p.to_path_buf())
         .unwrap_or_else(crate::binaries_dir);
 
-    let priority_path = format!(
-        "{};{}",
-        dll_dir.display(),
-        std::env::var("PATH").unwrap_or_default()
-    );
+    let mut cmd = tokio::process::Command::new(&binary);
+    cmd.arg("--version").current_dir(&lib_dir);
+
+    #[cfg(target_os = "windows")]
+    {
+        let current_path = std::env::var("PATH").unwrap_or_default();
+        cmd.env("PATH", format!("{};{}", lib_dir.display(), current_path));
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let current = std::env::var("LD_LIBRARY_PATH").unwrap_or_default();
+        let path = if current.is_empty() {
+            lib_dir.display().to_string()
+        } else {
+            format!("{}:{}", lib_dir.display(), current)
+        };
+        cmd.env("LD_LIBRARY_PATH", path);
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let current = std::env::var("DYLD_LIBRARY_PATH").unwrap_or_default();
+        let path = if current.is_empty() {
+            lib_dir.display().to_string()
+        } else {
+            format!("{}:{}", lib_dir.display(), current)
+        };
+        cmd.env("DYLD_LIBRARY_PATH", path);
+    }
 
     let result = tokio::time::timeout(
         std::time::Duration::from_secs(8),
-        tokio::process::Command::new(&binary)
-            .arg("--version")
-            .current_dir(&dll_dir)
-            .env("PATH", &priority_path)
-            .output(),
+        cmd.output(),
     )
     .await;
 
@@ -378,16 +498,31 @@ async fn test_llama_binary() -> (bool, String) {
                 let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
                 let text = if text.is_empty() {
                     String::from_utf8_lossy(&out.stderr).trim().to_string()
-                } else { text };
+                } else {
+                    text
+                };
                 (true, format!("OK — {}", text.lines().next().unwrap_or("ready")))
             } else {
-                let desc = match code as u32 {
-                    0xC0000135 => "DLL not found — re-run: npm run setup".to_string(),
-                    0xC0000139 => "DLL version mismatch — install Visual C++ Redistributable".to_string(),
-                    0xC0000005 => "crash (access violation)".to_string(),
-                    _ => format!("exited with code {code:#X}"),
-                };
-                (false, desc)
+                #[cfg(target_os = "windows")]
+                {
+                    let desc = match code as u32 {
+                        0xC0000135 => "DLL not found — re-run: deno task setup".to_string(),
+                        0xC0000139 => "DLL version mismatch — install Visual C++ Redistributable".to_string(),
+                        0xC0000005 => "crash (access violation)".to_string(),
+                        _ => format!("exited with code {code:#X}"),
+                    };
+                    (false, desc)
+                }
+                #[cfg(not(target_os = "windows"))]
+                {
+                    let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
+                    let msg = if err.is_empty() {
+                        format!("exited with code {code}")
+                    } else {
+                        err.lines().next().unwrap_or("failed").to_string()
+                    };
+                    (false, msg)
+                }
             }
         }
         Ok(Err(e)) => (false, format!("failed to launch: {e}")),
@@ -396,9 +531,17 @@ async fn test_llama_binary() -> (bool, String) {
 }
 
 /// Download and silently install the Visual C++ Redistributable 2022 x64.
-/// Emits `download_progress` events during download.
+/// Emits `download_progress` events during download. Windows only.
 #[tauri::command]
 pub async fn install_vcredist(app_handle: tauri::AppHandle) -> CmdResult<()> {
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = app_handle;
+        return Err("Visual C++ Redistributable is Windows-only — not needed on this OS".into());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
     let url = crate::constants::VCREDIST_URL;
     let dest = std::env::temp_dir().join("vc_redist.x64.exe");
 
@@ -459,10 +602,12 @@ pub async fn install_vcredist(app_handle: tauri::AppHandle) -> CmdResult<()> {
         }
         code => Err(format!("installer exited with code {code:?}")),
     }
+    } // cfg windows
 }
 
 /// Copy the Visual C++ runtime DLLs from System32 into our binaries/ directory.
 /// Called automatically after VCRedist install and can be triggered manually.
+#[cfg(target_os = "windows")]
 fn copy_vcredist_dlls_to_binaries() {
     let root = crate::binaries_dir();
     let system32 = std::path::Path::new("C:\\Windows\\System32");
@@ -632,14 +777,12 @@ pub async fn open_llama_diagnostic() -> CmdResult<()> {
             .spawn()
             .map_err(to_cmd_err)?;
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
     {
-        // macOS / Linux: open a terminal with the equivalent shell script
         let sh = std::env::temp_dir().join("proactive_agent_diag.sh");
         let sh_content = format!(
-            "#!/bin/sh\ncd '{}'\necho 'Testing: {}'\n'{}' --version\necho 'Exit: '$?\nread -p 'Press Enter to close'\n",
-            bin_dir.display(), binary_name,
-            bin_dir.join(&binary_name).display()
+            "#!/bin/sh\ncd '{}'\nexport DYLD_LIBRARY_PATH=\"{}:${{DYLD_LIBRARY_PATH:-}}\"\necho 'Testing: {}'\n'{}' --version\necho 'Exit: '$?\nread -p 'Press Enter to close'\n",
+            dll_dir.display(), dll_dir.display(), binary_name, binary.display()
         );
         std::fs::write(&sh, &sh_content).map_err(to_cmd_err)?;
         let _ = std::process::Command::new("chmod").args(["+x", sh.to_str().unwrap_or("")]).status();
@@ -647,6 +790,42 @@ pub async fn open_llama_diagnostic() -> CmdResult<()> {
             .args(["-a", "Terminal", sh.to_str().unwrap_or("")])
             .spawn()
             .map_err(to_cmd_err)?;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let sh = std::env::temp_dir().join("proactive_agent_diag.sh");
+        let sh_content = format!(
+            "#!/bin/sh\ncd '{}'\nexport LD_LIBRARY_PATH=\"{}:${{LD_LIBRARY_PATH:-}}\"\necho 'Testing: {}'\n'{}' --version\necho 'Exit: '$?\nread -p 'Press Enter to close'\n",
+            dll_dir.display(), dll_dir.display(), binary_name, binary.display()
+        );
+        std::fs::write(&sh, &sh_content).map_err(to_cmd_err)?;
+        let _ = std::process::Command::new("chmod").args(["+x", sh.to_str().unwrap_or("")]).status();
+        let terminals: &[(&str, &[&str])] = &[
+            ("xdg-terminal-exec", &[sh.to_str().unwrap_or("")]),
+            ("gnome-terminal", &["--", sh.to_str().unwrap_or("")]),
+            ("konsole", &["-e", sh.to_str().unwrap_or("")]),
+            ("xterm", &["-e", sh.to_str().unwrap_or("")]),
+        ];
+        let mut launched = false;
+        for (bin, args) in terminals {
+            if std::process::Command::new(bin).args(*args).spawn().is_ok() {
+                launched = true;
+                break;
+            }
+        }
+        if !launched {
+            let out = std::process::Command::new(&binary)
+                .arg("--version")
+                .current_dir(&dll_dir)
+                .env("LD_LIBRARY_PATH", dll_dir.display().to_string())
+                .output()
+                .map_err(to_cmd_err)?;
+            return Err(format!(
+                "no terminal found; probe exit {}: {}",
+                out.status.code().unwrap_or(-1),
+                String::from_utf8_lossy(&out.stdout)
+            ));
+        }
     }
 
     Ok(())

@@ -316,19 +316,40 @@ pub fn find_sidecar(name: &str) -> Option<PathBuf> {
         .find(|p| p.exists() && p.metadata().map(|m| m.len() > 1024).unwrap_or(false))
 }
 
-/// Build a tokio::process::Command that prioritises our bundled DLLs on Windows.
-/// By prepending `bin_dir` to PATH we ensure our ggml/llama DLLs are found
-/// before any conflicting versions from LM Studio, CUDA installers, etc.
+/// Build a tokio::process::Command that finds bundled native libs next to the binary.
+/// Windows: prepends `bin_dir` to PATH (DLL search).
+/// Linux/macOS: prepends `bin_dir` to LD_LIBRARY_PATH / DYLD_LIBRARY_PATH.
 fn make_cmd(binary: &PathBuf, bin_dir: &PathBuf) -> tokio::process::Command {
     let mut cmd = tokio::process::Command::new(binary);
     cmd.current_dir(bin_dir);
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::piped());
 
-    // Prepend our binaries/ to PATH so Windows DLL search finds our versions first
-    let current_path = std::env::var("PATH").unwrap_or_default();
-    let priority_path = format!("{};{}", bin_dir.display(), current_path);
-    cmd.env("PATH", priority_path);
+    #[cfg(target_os = "windows")]
+    {
+        let current_path = std::env::var("PATH").unwrap_or_default();
+        cmd.env("PATH", format!("{};{}", bin_dir.display(), current_path));
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let current = std::env::var("LD_LIBRARY_PATH").unwrap_or_default();
+        let path = if current.is_empty() {
+            bin_dir.display().to_string()
+        } else {
+            format!("{}:{}", bin_dir.display(), current)
+        };
+        cmd.env("LD_LIBRARY_PATH", path);
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let current = std::env::var("DYLD_LIBRARY_PATH").unwrap_or_default();
+        let path = if current.is_empty() {
+            bin_dir.display().to_string()
+        } else {
+            format!("{}:{}", bin_dir.display(), current)
+        };
+        cmd.env("DYLD_LIBRARY_PATH", path);
+    }
 
     cmd
 }
@@ -353,7 +374,7 @@ pub fn start_chat_server(
             Some(b) => b,
             None => {
                 monitor::push_event(&event_log, "[ADAPTER]",
-                    "llama (chat): binary not found — run: npm run setup");
+                    "llama (chat): binary not found — run: deno task setup");
                 return;
             }
         };
@@ -445,7 +466,7 @@ fn spawn_sidecars(config: SharedConfig, event_log: SharedEventLog, chat_child: S
         if tts_model.exists() {
             monitor::push_event(&event_log, "[ADAPTER]", "TTS (Piper) ready — subprocess mode");
         } else {
-            monitor::push_event(&event_log, "[ADAPTER]", "TTS unavailable — run: npm run setup");
+            monitor::push_event(&event_log, "[ADAPTER]", "TTS unavailable — run: deno task setup");
         }
     });
 }
@@ -461,7 +482,7 @@ fn spawn_direct(
         Some(b) => b,
         None => {
             monitor::push_event(&event_log, "[ADAPTER]",
-                format!("{display_name}: not found — run: npm run setup"));
+                format!("{display_name}: not found — run: deno task setup"));
             return;
         }
     };

@@ -1,0 +1,22 @@
+{
+  "nodeModulesDir": "auto",
+  "tasks": {
+    "install": "deno install",
+    "dev": "deno run -A --node-modules-dir npm:vite",
+    "build": "deno run -A --node-modules-dir npm:typescript/tsc --noEmit && deno run -A --node-modules-dir npm:vite build",
+    "preview": "deno run -A --node-modules-dir npm:vite preview",
+    "tauri": "deno run -A --node-modules-dir npm:@tauri-apps/cli",
+    "setup": "deno run -A scripts/setup.ts",
+    "setup:linux": "bash scripts/fetch-sidecars-linux.sh",
+    "setup:mac": "bash scripts/fetch-sidecars-macos.sh",
+    "setup:windows": "pwsh -File scripts/fetch-sidecars-windows.ps1",
+    "parakeet:linux": "bash scripts/run-parakeet-linux.sh"
+  },
+  "exclude": [
+    "src-tauri/target",
+    "dist",
+    "binaries",
+    "models",
+    "data"
+  ]
+}

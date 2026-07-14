@@ -227,29 +227,37 @@ impl SidecarState {
 
 /// Poll a single sidecar and return its state + http status code.
 async fn poll_sidecar(client: &Client, port: u16) -> (SidecarState, u16, u64) {
-    let url = format!("http://{}:{port}/health", crate::SIDECAR_HOST);
+    // Prefer /health (llama); Parakeet upstream uses /healthz
+    let paths = ["/health", "/healthz"];
     let start = std::time::Instant::now();
-    match client.get(&url).send().await {
-        Ok(r) => {
-            let status = r.status();
-            let latency = start.elapsed().as_millis() as u64;
-            let state = if status.is_success() {
-                SidecarState::Online
-            } else if status.as_u16() == 503 {
-                // llama.cpp returns 503 + {"status":"loading model"} while the GGUF loads
-                let body = r.text().await.unwrap_or_default();
-                if body.contains("loading") {
-                    SidecarState::Loading
+    for path in paths {
+        let url = format!("http://{}:{port}{path}", crate::SIDECAR_HOST);
+        match client.get(&url).send().await {
+            Ok(r) => {
+                let status = r.status();
+                let latency = start.elapsed().as_millis() as u64;
+                let state = if status.is_success() {
+                    SidecarState::Online
+                } else if status.as_u16() == 503 {
+                    // llama.cpp returns 503 + {"status":"loading model"} while the GGUF loads
+                    let body = r.text().await.unwrap_or_default();
+                    if body.contains("loading") {
+                        SidecarState::Loading
+                    } else {
+                        SidecarState::Offline
+                    }
+                } else if status.as_u16() == 404 {
+                    // Wrong health path for this sidecar — try the next candidate
+                    continue;
                 } else {
                     SidecarState::Offline
-                }
-            } else {
-                SidecarState::Offline
-            };
-            (state, status.as_u16(), latency)
+                };
+                return (state, status.as_u16(), latency);
+            }
+            Err(_) => continue,
         }
-        Err(_) => (SidecarState::Offline, 0, start.elapsed().as_millis() as u64),
     }
+    (SidecarState::Offline, 0, start.elapsed().as_millis() as u64)
 }
 
 /// Long-running task — polls each sidecar's /health endpoint every 5 seconds

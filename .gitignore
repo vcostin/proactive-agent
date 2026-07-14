@@ -13,6 +13,7 @@ binaries/*
 # Local DB data and downloaded models (populated at runtime, never committed)
 data/
 models/
+.cache/
 
 # Machine-local cargo config (contains hardcoded protoc path)
 src-tauri/.cargo/config.toml

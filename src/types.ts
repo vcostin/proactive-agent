@@ -26,6 +26,9 @@ export interface DownloadProgress {
 }
 
 export interface SystemDeps {
+  /** "windows" | "linux" | "macos" */
+  platform: string;
+  /** Windows-only check; always true elsewhere */
   vcredist_ok: boolean;
   vulkan_ok: boolean;
   llama_server_ok: boolean;
