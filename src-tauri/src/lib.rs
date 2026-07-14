@@ -312,8 +312,25 @@ pub fn find_sidecar(name: &str) -> Option<PathBuf> {
     .chain(exe_candidates)
     .collect();
 
-    candidates.into_iter()
-        .find(|p| p.exists() && p.metadata().map(|m| m.len() > 1024).unwrap_or(false))
+    candidates.into_iter().find(|p| sidecar_file_usable(p))
+}
+
+/// Accept real binaries and small shell launchers (Linux Parakeet wrapper is ~700 B).
+/// The old `len > 1024` gate rejected the managed Linux launcher as "not found".
+fn sidecar_file_usable(p: &PathBuf) -> bool {
+    let Ok(meta) = p.metadata() else { return false };
+    if !meta.is_file() { return false; }
+    let len = meta.len();
+    #[cfg(target_os = "windows")]
+    {
+        // Skip empty / placeholder stubs that sometimes appear in binaries/
+        len > 1024
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        len > 32 && (meta.permissions().mode() & 0o111) != 0
+    }
 }
 
 /// Build a tokio::process::Command that finds bundled native libs next to the binary.
@@ -456,10 +473,20 @@ fn spawn_sidecars(config: SharedConfig, event_log: SharedEventLog, chat_child: S
                  "--alias".into(), "nomic-embed-text".into()],
             event_log.clone(), pids.clone());
 
-        // Parakeet TDT STT server — listens on port 5092, loads model from HF cache
-        spawn_direct("parakeet-server", "Parakeet STT",
-            vec![],   // server uses hardcoded host/port from app.py
-            event_log.clone(), pids.clone());
+        // Parakeet TDT STT — Windows: frozen PyInstaller binary; Linux: managed
+        // launcher under binaries/parakeet/ (written by scripts/run-parakeet-linux.sh).
+        // Skip spawn if something already answers health on the STT port.
+        let stt_port = _stt_port;
+        let evt = event_log.clone();
+        let pids_stt = pids.clone();
+        tauri::async_runtime::spawn(async move {
+            if stt_already_up(stt_port).await {
+                monitor::push_event(&evt, "[ADAPTER]",
+                    format!("Parakeet STT already up on :{stt_port} — not spawning"));
+                return;
+            }
+            spawn_direct("parakeet-server", "Parakeet STT", vec![], evt, pids_stt);
+        });
 
         // TTS uses Piper as a subprocess per request — no persistent server needed.
         let tts_model = cfg_models_dir.join("tts").join(constants::TTS_MODEL_FILE);
@@ -469,6 +496,26 @@ fn spawn_sidecars(config: SharedConfig, event_log: SharedEventLog, chat_child: S
             monitor::push_event(&event_log, "[ADAPTER]", "TTS unavailable — run: deno task setup");
         }
     });
+}
+
+/// True if an STT server already responds on `port` (e.g. manually started).
+async fn stt_already_up(port: u16) -> bool {
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_millis(500))
+        .build()
+    {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+    for path in ["/healthz", "/health"] {
+        let url = format!("http://{}:{port}{path}", SIDECAR_HOST);
+        if let Ok(r) = client.get(&url).send().await {
+            if r.status().is_success() {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 fn spawn_direct(

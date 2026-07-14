@@ -217,11 +217,16 @@ else
   echo "  OK nomic-embed-text (already present)"
 fi
 
-# ─── Parakeet note ────────────────────────────────────────────────────────────
+# ─── Parakeet STT (managed Python sidecar) ────────────────────────────────────
 echo
-echo "[skip] Parakeet STT — no Linux sidecar yet (voice input disabled)."
-echo "       Typing + memory + proactive + Piper TTS are enough for bring-up."
-mkdir -p "$BIN_DIR/parakeet"
+echo "[4/4] Parakeet STT (auto-started with the app)"
+if bash "$ROOT/scripts/run-parakeet-linux.sh" --install; then
+  echo "  OK parakeet launcher → binaries/parakeet/"
+else
+  echo "  WARN: Parakeet install failed — voice input disabled until fixed"
+  echo "        Re-run: deno task parakeet:linux"
+  mkdir -p "$BIN_DIR/parakeet"
+fi
 
 # ─── Summary ─────────────────────────────────────────────────────────────────
 echo
@@ -238,5 +243,5 @@ echo
 echo "Next:"
 echo "  1. Add a chat .gguf under models/"
 echo "  2. deno install          # or: npm install"
-echo "  3. deno task tauri dev   # or: npm run tauri -- dev"
+echo "  3. deno task tauri dev   # Parakeet starts automatically with the app"
 echo "─────────────────────────────────────────────────────────────"

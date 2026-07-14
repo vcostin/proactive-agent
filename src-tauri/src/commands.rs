@@ -232,14 +232,23 @@ pub async fn start_voice_input(
 
     let stt_port = config.read().await.stt_port;
 
-    // Prefight: mic capture alone is useless without STT.
+    // Prefight: mic alone is useless without STT. Allow a warm-up window —
+    // Parakeet loads its ONNX model for several seconds after spawn.
     if !stt_reachable(stt_port).await {
-        return Err(format!(
-            "Speech-to-text is not running on port {stt_port} (Parakeet). \
-             Waveform works, but nothing will be transcribed. \
-             On Linux: run Parakeet (docker/python) on :{stt_port}, or type instead — \
-             see scripts/run-parakeet-linux.sh"
-        ));
+        crate::monitor::emit_debug_event(
+            &app_handle,
+            &crate::monitor::new_event_log(),
+            "[AUDIO]",
+            format!("STT not ready on :{stt_port} — waiting up to 25s for sidecar…"),
+        ).await;
+        if !wait_for_stt(stt_port, std::time::Duration::from_secs(25)).await {
+            return Err(format!(
+                "Speech-to-text is not running on port {stt_port} (Parakeet). \
+                 Waveform works, but nothing will be transcribed. \
+                 On Linux: deno task setup installs a launcher that starts with the app. \
+                 Manual: deno task parakeet:linux — or type instead."
+            ));
+        }
     }
 
     // Stop any existing recording
@@ -327,6 +336,17 @@ async fn stt_reachable(port: u16) -> bool {
         port
     );
     matches!(client.get(&alt).send().await, Ok(r) if !r.status().is_server_error() || r.status().as_u16() == 405 || r.status().as_u16() == 422 || r.status().as_u16() == 400)
+}
+
+async fn wait_for_stt(port: u16, budget: std::time::Duration) -> bool {
+    let start = std::time::Instant::now();
+    while start.elapsed() < budget {
+        if stt_reachable(port).await {
+            return true;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
+    false
 }
 
 /// Current mic energy level (0.0–1.0) for the waveform visualiser.

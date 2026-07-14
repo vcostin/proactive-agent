@@ -84,8 +84,12 @@ pub fn check_binaries() -> BinariesStatus {
         llama_ready:    crate::find_sidecar("llama-server").is_some(),
         piper_ready:    crate::find_sidecar("piper").is_some(),
         parakeet_ready: crate::find_sidecar("parakeet-server").is_some(),
-        parakeet_note:  "Speech-to-text requires a manual build step. \
-                         See ROADMAP for options.".into(),
+        parakeet_note: {
+            #[cfg(target_os = "linux")]
+            { "Linux: managed by deno task setup (auto-starts with the app).".into() }
+            #[cfg(not(target_os = "linux"))]
+            { "Speech-to-text requires a manual build step. See ROADMAP for options.".into() }
+        },
     }
 }
 

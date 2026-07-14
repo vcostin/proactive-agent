@@ -177,10 +177,12 @@ See `ROADMAP.md` for current status.
 |--|---------|-------|-------|
 | Setup | `deno task setup` / `setup:windows` | `deno task setup` | `deno task setup` / `setup:mac` |
 | GPU | Vulkan + VCRedist check | Vulkan | Metal (no Vulkan row) |
-| STT (Parakeet) | Sidecar when present | Skip until ort migration | Rebuild needed |
+| STT (Parakeet) | Frozen sidecar when present | Auto-started with app (managed Python launcher) | Rebuild needed |
 | TTS (Piper) | Yes | Yes | Yes |
 
 System requirements adapt per OS: VCRedist is Windows-only; llama-server is probed on all three.
+On Linux, `deno task setup` installs a Parakeet launcher under `binaries/parakeet/`; the app
+spawns it on startup like llama embed (no separate terminal).
 
 ---
 
