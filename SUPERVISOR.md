@@ -21,23 +21,26 @@ Be direct. No diplomatic softening. If something is wrong, say what is wrong and
 | Frontend | React 18, hooks only | No class components, no global state library yet |
 | Inference | llama-server (llama.cpp) | Ports 18080 (chat), 18081 (embed) |
 | Embedder | nomic-embed-text (locked) | 768-dim, NEVER swapped, runs on :18081 separately |
-| STT | Parakeet TDT :5092 | PyInstaller frozen, port hardcoded — known debt |
+| STT | Parakeet TDT :5092 | Windows frozen sidecar / Linux managed launcher — interim until ort |
 | TTS | Piper (subprocess) | WAV→f32 pipeline, resampling, stereo upmix |
 | Audio I/O | cpal | `!Send` stream on dedicated std::thread |
 | Vector DB | LanceDB 0.14 (pinned) | Two tables: `episodic`, `semantic` |
 | Proactivity | LLM `<defer>` tags | Lenient regex, discard on parse failure |
 | Persona | Fixed system prompt | Never diluted by retrieved memory |
 | Port range | 18080–18083 | Chosen explicitly to avoid LM Studio (8080) |
+| JS tooling | Deno preferred | `deno task …`; npm still OK |
 
 ### Known technical debt (watch for regressions)
 
 - `espeak-ng-data/` not included in MSI installer → TTS silent in production
 - `ggml-cpu-*.dll` not bundled → CPU fallback uses slow reference kernels
-- Parakeet has no public release URL → blocks thin installer
+- Linux STT still depends on a managed Python venv (`.cache/parakeet-tdt/`) — interim until ort
+- Windows Parakeet has no public release URL → frozen sidecar acquisition pain
 - No `tauri-specta` typed IPC bindings → runtime drift risk at command boundary
-- STT port hardcoded in parakeet binary → cannot reassign without rebuild
+- STT port hardcoded in upstream Parakeet server → cannot reassign without rebuild/env change
 - Linear interpolation resampler in `audio/tts.rs` → acceptable for now
 - No retry logic in STT client → silent transcript drops on transient failure
+- `find_sidecar` Windows size gate (`>1024`) vs Unix launcher (`>32` + exec) — do not unify wrongly
 
 ### The episodic memory schema (critical — do not let this regress)
 
@@ -69,7 +72,7 @@ Run this checklist against every diff or file the Worker produces. Be explicit a
 
 ### Hard stops — reject immediately if any of these are true
 
-- [ ] Python dependency introduced anywhere in the Rust backend
+- [ ] Python dependency introduced in the **Rust** backend / `Cargo.toml` (Linux managed Parakeet venv outside Rust is known interim — do not expand it)
 - [ ] New port in range 1024–18079 without explicit justification (collision risk)
 - [ ] Port 8080 used for anything
 - [ ] Embedding model slot made swappable
@@ -78,11 +81,12 @@ Run this checklist against every diff or file the Worker produces. Be explicit a
 - [ ] User and assistant turns mixed in the same unlabeled retrieval pool
 - [ ] `unwrap()` in non-test Rust code
 - [ ] `cargo check` fails
-- [ ] New sidecar introduced without a corresponding entry in `tauri.conf.json`
+- [ ] New **bundled** sidecar listed in `tauri.conf.json` `externalBin` without a fetch/setup story (`externalBin` is currently empty by design)
 - [ ] New Tauri command added without a corresponding TypeScript type (until `tauri-specta` is adopted, at minimum document the shape)
 - [ ] WAV sample rate assumed rather than read from header
 - [ ] Mono PCM fed directly into stereo cpal buffer without upmix
 - [ ] Literal URL, hostname, model filename, or magic timeout/size value introduced outside `constants.rs` — all such values must be named constants
+- [ ] GPU used for STT/TTS/embeddings (VRAM reserved for LLM only)
 
 ### Yellow flags — flag and require explanation before proceeding
 
@@ -104,7 +108,8 @@ Run this checklist against every diff or file the Worker produces. Be explicit a
 - [ ] Two LanceDB tables (`episodic`, `semantic`) — not merged, not added to
 - [ ] `cpal::Stream` still on dedicated `std::thread`, not inside tokio
 - [ ] `find_sidecar()` still searches subdirectory first, then root as legacy fallback
-- [ ] `spawn_direct()` still prepends binary parent dir to PATH before launch
+- [ ] `make_cmd()` / `spawn_direct()` still prepends binary parent dir to PATH / `LD_LIBRARY_PATH` before launch
+- [ ] Unix `sidecar_file_usable` still accepts small executable launchers (Linux Parakeet)
 - [ ] Semantic distillation still runs on a background task, never blocking a conversation turn
 - [ ] Scheduler still fires via Tauri event to frontend, not via direct function call
 

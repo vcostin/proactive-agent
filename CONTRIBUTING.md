@@ -28,7 +28,8 @@ git commit -m "feat: describe the change"
 
 # 3. Push branch and TEST
 git push -u origin feat/my-thing
-# → run npm run tauri dev on the branch
+# → run deno task tauri dev on the branch
+# → (or: npm run tauri -- dev)
 # → verify the feature works end-to-end by hand
 # → fix anything that broke, commit fixes to the branch
 # → do NOT merge until you have tested it yourself

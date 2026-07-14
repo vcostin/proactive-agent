@@ -1,9 +1,13 @@
 # STT Migration: Parakeet HTTP → ort in-process
 
-**Goal:** Replace the PyInstaller-frozen Parakeet server with direct ONNX inference
-inside the Rust process using the `ort` crate. Same model, same accuracy, no Python.
+**Goal:** Replace the Parakeet HTTP sidecar (Windows PyInstaller **or** Linux managed
+Python launcher from `deno task setup`) with direct ONNX inference inside the Rust
+process using the `ort` crate. Same model, same accuracy, no Python.
 
 **Hardware constraint:** CPU only. GPU is reserved exclusively for the LLM.
+
+**Interim (July 2026):** Linux mic works via auto-spawned launcher + `.cache/parakeet-tdt/`.
+That path is explicitly temporary — this document removes it.
 
 ---
 

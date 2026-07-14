@@ -1,7 +1,7 @@
 # Proactive Agent — Architecture
 
-Current implementation as of May 2026. Describes what is actually built and running,
-not the original design. For decisions still open see `ROADMAP.md § Needs Decision`.
+Current implementation as of July 2026. Describes what is actually built and running,
+not aspirational design. For planned work see `ROADMAP.md`.
 
 ---
 
@@ -13,7 +13,7 @@ GPU (VRAM)  ──►  LLM inference only
                  Larger future models need headroom — nothing else competes for VRAM.
 
 CPU         ──►  Everything else:
-                 STT  — Parakeet ONNX via ort crate (in-process, no Python)
+                 STT  — Parakeet ONNX on CPU (today: HTTP sidecar; target: ort in-process)
                  TTS  — Piper subprocess
                  Embeddings — nomic-embed-text via llama-server CPU path
                  LanceDB — embedded, CPU/disk
@@ -37,21 +37,22 @@ would be faster — the LLM needs the budget headroom for 14B, 32B and beyond.
 │             └─────────────────────────────┘             │
 └────────────────────────────┬────────────────────────────┘
                              │
-              ┌──────────────┼──────────────┐
-              │ HTTP         │ in-process   │ subprocess
-       ┌──────▼──────┐  ┌───▼────────┐  ┌──▼──────────┐
-       │ llama-server│  │  ort crate │  │    piper    │
-       │  :18080     │  │ (Parakeet  │  │ subprocess  │
-       │  :18081     │  │  ONNX CPU) │  │ (TTS, CPU)  │
-       │ (GPU, VRAM) │  │            │  │             │
-       └──────┬──────┘  └────────────┘  └─────────────┘
-              │
-       ┌──────▼──────┐
-       │  LanceDB    │
-       │  (embedded) │
-       └─────────────┘
+        ┌────────────────────┼────────────────────┐
+        │ HTTP               │ HTTP (:5092)       │ subprocess
+ ┌──────▼──────┐      ┌──────▼──────┐      ┌──────▼──────┐
+ │ llama-server│      │  Parakeet   │      │    piper    │
+ │  :18080     │      │  STT sidecar│      │  (TTS, CPU) │
+ │  :18081     │      │  (CPU ONNX) │      │             │
+ │ (GPU, VRAM) │      │  → ort soon │      │             │
+ └──────┬──────┘      └─────────────┘      └─────────────┘
+        │
+ ┌──────▼──────┐
+ │  LanceDB    │
+ │  (embedded) │
+ └─────────────┘
 ```
 
+JS tooling: **Deno preferred** (`deno.json`); `package.json` / npm still supported.
 ---
 
 ## Component inventory
@@ -92,34 +93,36 @@ orchestrator or frontend.
 
 ---
 
-### 2. Speech-to-text — Parakeet TDT via ort (in progress)
+### 2. Speech-to-text — Parakeet TDT (HTTP sidecar today → ort next)
 
-**Current:** `parakeet-server-x86_64-pc-windows-msvc.exe` (PyInstaller frozen Python binary)
-**Target:** Parakeet ONNX loaded in-process via `ort` Rust crate — no Python, no subprocess, no port
+**Current:** HTTP sidecar on `:5092`
+- **Windows:** `parakeet-server-….exe` (PyInstaller frozen Python), when present
+- **Linux:** small shell launcher under `binaries/parakeet/` written by
+  `scripts/run-parakeet-linux.sh` (`deno task setup` / `deno task parakeet:linux`).
+  Real work runs in `.cache/parakeet-tdt/` (uv venv, CPU ONNX, `PARAKEET_USE_GPU=false`).
+  The app auto-spawns the launcher on startup if `/healthz` is not already up.
+
+**Target:** Parakeet ONNX loaded in-process via the `ort` Rust crate — no Python, no
+subprocess, no port. See `STT_ORT_MIGRATION.md`.
 
 | | Current | Target |
 |--|---------|--------|
-| **Runtime** | PyInstaller frozen binary | `ort` Rust crate in-process |
+| **Runtime** | HTTP sidecar (frozen exe or managed launcher) | `ort` Rust crate in-process |
 | **Model** | Parakeet TDT 0.6B ONNX | Same model, same file |
-| **Port** | 5092 (hardcoded) | None — direct function call |
-| **Python** | Required | Eliminated |
+| **Port** | 5092 (hardcoded in upstream server) | None — direct function call |
+| **Python** | Required for sidecar | Eliminated |
 | **CPU/GPU** | CPU only | CPU only (deliberate — GPU reserved for LLM) |
-| **Cross-platform** | Needs rebuild per OS | Single ONNX file, works everywhere |
+| **Cross-platform** | Per-OS launcher/binary | Single ONNX file |
 
 **Pipeline (current):**
-`48kHz stereo → VAD → rubato 16kHz → WAV → HTTP POST → Python → ONNX → text`
+`48kHz stereo → VAD → rubato 16kHz → WAV → HTTP POST → sidecar ONNX → text`
 
 **Pipeline (target):**
 `48kHz stereo → VAD → rubato 16kHz → log-mel spectrogram → ort tensor → Parakeet ONNX → CTC decode → text`
 
-**What changes in code:** Only `audio/stt.rs` — `SttClient` becomes a struct holding
-an `ort::Session` instead of a `reqwest::Client`. Everything upstream (VAD, rubato,
-normalization) stays identical.
-
-**What changes in distribution:** The `.onnx` model file is already downloaded by
-the wizard. The PyInstaller `.exe` (~48 MB frozen Python) is removed from `externalBin`.
-
-See `STT_ORT_MIGRATION.md` for the full implementation plan.
+**What changes for ort:** Primarily `audio/stt.rs` — `SttClient` holds an `ort::Session`
+instead of a `reqwest::Client`. Upstream (VAD, rubato, normalization) stays identical.
+Linux launcher scripts and spawn path go away with the migration.
 
 **Whisper is retired. Do not revisit it.** Lower accuracy on non-native accents confirmed.
 See WORK_LOG § Episodic memory role-blurring bug for context.
@@ -330,60 +333,63 @@ common local services. If 18080 is taken, change `llama_port` in `config.json`.
 
 ## Binary layout
 
-### Dev (`project/binaries/` — gitignored, populated by `npm run setup`)
+### Dev (`project/binaries/` — gitignored, populated by `deno task setup`)
 
 ```
 binaries/
 ├── llama/
-│   ├── llama-server-x86_64-pc-windows-msvc.exe
-│   ├── ggml.dll, ggml-base.dll, ggml-vulkan.dll
-│   ├── ggml-cpu-*.dll         ← CPU dispatch variants
-│   ├── llama.dll, llama-common.dll, mtmd.dll
-│   └── libomp140.x86_64.dll
+│   ├── llama-server-*                 ← Windows .exe or Linux ELF
+│   └── ggml / Vulkan / runtime libs
 ├── parakeet/
-│   ├── parakeet-server-x86_64-pc-windows-msvc.exe  ← manual build, no download URL
-│   └── models/
+│   ├── parakeet-server-*              ← Windows: frozen exe · Linux: ~600 B bash launcher
+│   └── models/                        ← optional wizard ONNX copies
 └── piper/
-    ├── piper-x86_64-pc-windows-msvc.exe
-    ├── espeak-ng.dll, onnxruntime.dll, piper_phonemize.dll, ...
+    ├── piper-*
+    ├── onnxruntime / espeak libs
     └── espeak-ng-data/
 ```
 
+Linux Parakeet Python env (not under `binaries/`):
+
+```
+.cache/parakeet-tdt/                   ← gitignored; uv venv + HF model cache
+```
+
+`find_sidecar()` on Unix accepts small **executable** launchers (`> 32` bytes + exec bit).
+Windows still requires files `> 1024` bytes so empty stubs are ignored.
+
 ### Production — two separate locations
 
-**Installer bundle** (`C:\Program Files\proactive-agent\` or equivalent):
+**Installer bundle** (optional frozen Parakeet on Windows historically; `externalBin` is
+currently **empty** — sidecars come from setup/wizard):
+
 ```
-proactive-agent.exe
-parakeet-server-x86_64-pc-windows-msvc.exe   ← only bundled binary
+proactive-agent(.exe)
 ```
 
-**Wizard-downloaded** (`%APPDATA%\com.proactive.agent\binaries\`):
+**Wizard / setup-downloaded** (`%APPDATA%\com.proactive.agent\binaries\` on Windows,
+`~/.local/share/com.proactive.agent/binaries/` on Linux):
+
 ```
 llama/
-    llama-server-x86_64-pc-windows-msvc.exe + all DLLs
 piper/
-    piper-x86_64-pc-windows-msvc.exe + DLLs + espeak-ng-data/
+parakeet/   ← when present
 ```
 
-**Why AppData, not the exe directory:**
-The exe directory (`Program Files`) requires admin rights to write.
-The wizard downloads without elevation — AppData is always user-writable.
-
-**Why only parakeet is bundled:**
-`llama-server` and `piper` have public GitHub releases and are downloaded by
-the wizard at first run. Parakeet has no public release URL (PyInstaller frozen binary,
-manual build) — it must be pre-bundled. See `ROADMAP.md § Needs Decision`.
+**Why AppData / XDG data, not the exe directory:**
+Program Files (and some system prefixes) need elevation to write.
+The wizard downloads without elevation — user data dirs are always writable.
 
 ### `find_sidecar()` search order (release)
 
-1. `AppData/com.proactive.agent/binaries/{short}/{filename}` — wizard-downloaded
-2. `AppData/.../binaries/{filename}` — flat fallback
-3. `{exe_dir}/{short}/{filename}` — installer-bundled (parakeet)
+1. AppData / XDG `binaries/{short}/{filename}` — wizard-downloaded
+2. `…/binaries/{filename}` — flat fallback
+3. `{exe_dir}/{short}/{filename}` — installer-bundled (if any)
 4. `{exe_dir}/{filename}` — flat installer fallback
 
-**DLL isolation:** each sidecar lives in its own subdirectory so their DLLs cannot
-conflict. `spawn_direct()` prepends the binary's parent directory to `PATH` so
-Windows finds the right DLL version regardless of what else is on the system PATH.
+**Library isolation:** each sidecar lives in its own subdirectory.
+`make_cmd()` prepends the binary’s parent to `PATH` (Windows) or
+`LD_LIBRARY_PATH` / `DYLD_LIBRARY_PATH` (Unix) so native deps resolve next to the binary.
 
 ---
 
@@ -430,9 +436,10 @@ without a specific reason.
 | Vector DB | LanceDB (Rust crate) | Embedded, no server process, Arrow native |
 | Embedding model | nomic-embed-text (locked) | 768-dim, good quality, must not change |
 | Inference | llama.cpp REST | OpenAI-compatible, CPU+Vulkan on same binary |
-| STT runtime | Parakeet ONNX via `ort` (in progress) | In-process, no Python, same model, CPU-only |
+| STT runtime | Parakeet ONNX via HTTP sidecar → `ort` (planned) | Same model; ort removes Python/port |
 | STT model | Parakeet TDT 0.6B | Better accuracy than Whisper on non-native speech |
 | STT execution | CPU only | GPU reserved exclusively for LLM — headroom for larger models |
+| JS toolchain | Deno preferred; npm supported | `deno.json` + Node-compatible `package.json` |
 | TTS | Piper (subprocess) | Offline, natural quality, espeak-ng phonemization complex to replace |
 | TTS execution | CPU only | Same rationale — no GPU competition with LLM |
 | Audio resampling | rubato SincFixedIn | Device-rate-aware, adapts to any mic without code changes |
@@ -452,10 +459,11 @@ without a specific reason.
 |------|----------|--------|
 | `espeak-ng-data/` not in production installer | `tauri.conf.json` | TTS silent in MSI install |
 | `ggml-cpu-*.dll` not bundled | `tauri.conf.json` | CPU fallback uses slow reference kernels |
-| Parakeet has no public release URL | Distribution | Blocks thin installer approach |
+| Linux STT still needs Python (managed venv) | `.cache/parakeet-tdt/` | Interim until ort; not in Rust crate graph |
+| Windows Parakeet has no public release URL | Distribution | Frozen sidecar must be supplied manually |
 | No typed IPC bindings (`tauri-specta`) | Frontend/backend boundary | Runtime errors if command signatures drift |
-| `stt_port` hardcoded in parakeet binary | `config.rs` | Cannot reassign port without rebuilding parakeet |
-| Linear interpolation resampler | `audio/tts.rs` | Good enough; sinc resampler would be higher quality |
-| No retry logic in STT client | `audio/stt.rs` | Transient parakeet failure silently drops the transcript |
+| `stt_port` hardcoded in upstream Parakeet | config vs sidecar | Cannot reassign port without changing server env/code |
+| Linear interpolation resampler | `audio/tts.rs` | Good enough; sinc would be higher quality |
+| No retry logic in STT client | `audio/stt.rs` | Transient failure can drop a transcript |
 
 See `ROADMAP.md` for what is actively planned.

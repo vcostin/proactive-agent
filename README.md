@@ -24,7 +24,7 @@ Runs on your machine — no cloud, no telemetry, no API keys required.
 | Disk | 15 GB free | 30 GB free |
 | JS toolchain | **Deno 2+** (preferred) or Node 20+ | Deno |
 
-> Voice input (Parakeet) is Windows-oriented for now — Linux bring-up covers chat, memory, proactivity, and Piper TTS. Mic STT lands with the in-process `ort` migration.
+> Voice input works on **Linux** (managed Parakeet launcher, auto-started with the app) and **Windows** (frozen sidecar when present). Long-term STT target is in-process `ort` — see `STT_ORT_MIGRATION.md`.
 
 ---
 
@@ -32,9 +32,9 @@ Runs on your machine — no cloud, no telemetry, no API keys required.
 
 ```bash
 deno install                 # installs npm deps into node_modules/
-deno task setup              # llama-server, piper, embed + TTS models
+deno task setup              # llama, piper, embed/TTS models, Parakeet launcher
 # drop a chat .gguf into models/
-deno task tauri dev
+deno task tauri dev          # Parakeet STT starts with the app on :5092
 ```
 
 Node is still supported: `npm install && npm run setup && npm run tauri -- dev`.
@@ -92,10 +92,14 @@ deno task tauri build
 | Mic input (STT) | Off | 🎤 button in chat header |
 | Voice output (TTS) | Off | 🔊 button in chat header |
 
-**STT:** Speak → 800 ms of silence → transcribed and sent automatically.
+**STT:** Speak → silence → transcribed and sent automatically. Requires Parakeet on
+`:5092` (started automatically on Linux; frozen sidecar or manual start on Windows).
+If STT is still warming up, the mic waits briefly before failing with a visible error.
 
 **TTS:** Every assistant response is read aloud. Markdown, code blocks, and URLs are
 stripped before synthesis so they don't get read literally.
+
+Manual Linux Parakeet (debug only): `deno task parakeet:linux`.
 
 ---
 
@@ -149,7 +153,11 @@ Open the **Debug** tab for live system state:
 
 ## Config file
 
-`%APPDATA%\com.proactive.agent\config.json`
+| OS | Path |
+|----|------|
+| Windows | `%APPDATA%\com.proactive.agent\config.json` |
+| Linux | `~/.config/com.proactive.agent/config.json` (or XDG config) |
+| Dev | under the project `data/` tree |
 
 Delete this file to reset all settings to defaults (model path, ports, persona prompt,
 temperature, context window, etc.). The app recreates it on next launch.
@@ -168,8 +176,7 @@ so vector space compatibility is preserved across chat model changes.
 ## macOS
 
 Script exists at `scripts/fetch-sidecars-macos.sh` but is untested.
-Piper has an `aarch64` build; Parakeet STT needs a macOS PyInstaller rebuild.
-See `ROADMAP.md` for current status.
+STT on macOS waits on the `ort` migration (no frozen sidecar yet) — see `ROADMAP.md`.
 
 ## Platform support
 
@@ -189,7 +196,7 @@ spawns it on startup like llama embed (no separate terminal).
 ## Project layout
 
 ```
-proactive-ai/
+proactive-agent/
 ├── src/                  React frontend (TypeScript)
 │   ├── components/
 │   │   ├── chat/         ChatWindow, WaveformVisualizer
@@ -205,19 +212,22 @@ proactive-ai/
 │       ├── commands.rs   All Tauri invoke endpoints
 │       ├── monitor.rs    Health polling, debug event emitter
 │       └── config.rs     Runtime config, persisted to AppData
-├── binaries/             Sidecar executables (gitignored, populated by npm run setup)
-│   ├── llama/            llama-server + Vulkan DLLs
-│   ├── parakeet/         Parakeet STT server (PyInstaller frozen)
+├── binaries/             Sidecars (gitignored, from `deno task setup`)
+│   ├── llama/            llama-server + Vulkan libs
+│   ├── parakeet/         Windows: frozen exe · Linux: shell launcher (~600 B)
 │   └── piper/            Piper TTS + espeak-ng-data
+├── .cache/parakeet-tdt/  Linux Parakeet Python env (gitignored, from setup)
 ├── models/               GGUF model files (gitignored)
 │   ├── *.gguf            Chat models (downloaded by user)
 │   ├── nomic-embed-text-v1.5.Q8_0.gguf
 │   └── tts/              en_US-lessac-medium.onnx + .json
 ├── scripts/
-│   ├── setup.sh                      # OS dispatcher (deno/npm task setup)
-│   ├── run-frontend.sh               # Prefer Deno, fall back to npm
+│   ├── setup.ts / setup.sh           # OS dispatcher
+│   ├── run-frontend.ts / .sh         # Prefer Deno, fall back to npm
+│   ├── run-parakeet-linux.sh         # Install/run Linux STT (+ --install)
 │   ├── fetch-sidecars-linux.sh
 │   ├── fetch-sidecars-macos.sh
 │   └── fetch-sidecars-windows.ps1
 ├── deno.json             Deno tasks (preferred JS toolchain)
-├── package.json          npm-compatible scripts (still supported)```
+└── package.json          npm-compatible scripts (still supported)
+```

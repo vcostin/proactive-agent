@@ -1,6 +1,9 @@
 # Proactive Agent — Roadmap
 
-**Current state:** Chat, streaming, memory, voice input (STT), voice output (TTS), debug panel all working. Wizard downloads llama+piper on first run. Rubato sinc resampling in STT pipeline.
+**Current state:** Chat, streaming, memory, voice in/out, debug panel working on Linux
+(Deno toolchain) and Windows. Wizard / `deno task setup` downloads llama + piper;
+Linux additionally installs a Parakeet launcher that the app auto-spawns. Rubato sinc
+resampling in the STT pipeline. Long-term STT target remains in-process `ort`.
 
 ---
 
@@ -8,7 +11,7 @@
 
 | Item | Notes |
 |------|-------|
-| Chat inference | CPU binary + Vulkan DLLs, port 18080 |
+| Chat inference | CPU binary + Vulkan libs, port 18080 |
 | Streaming responses | SSE token streaming, blinking cursor |
 | Vector memory (episodic) | LanceDB + nomic-embed-text |
 | Semantic distillation | LLM-based, runs every 10 min |
@@ -20,11 +23,11 @@
 | Voice input (STT) | Parakeet TDT via HTTP, mono downmix, normalization |
 | Voice output (TTS) | Piper subprocess, resampled + stereo upmix |
 | Debug panel | Event log, context inspector, sidecar health, scheduler |
-| System requirements check | Auto-installs VCRedist |
+| System requirements check | OS-aware (VCRedist Windows-only; Vulkan; llama probe) |
 | Model hot-swap | Works without restart |
 | Memory reset | Wipes LanceDB + recent turns, requires typing RESET |
-| Graceful shutdown | All sidecars killed on app exit, DLLs released |
-| App icon | SVG source → all sizes via `npm run tauri icon` |
+| Graceful shutdown | All sidecars killed on app exit, libs released |
+| App icon | SVG source → all sizes via `deno task tauri icon` |
 | TTS speed fix | WAV resampled to device rate + mono→stereo upmix |
 | Production build | MSI (96 MB) + NSIS (74 MB) installers |
 | Unit tests (TTS) | 13 tests: `wav_to_f32`, `resample`, `clean_for_speech` |
@@ -34,12 +37,17 @@
 | Sidecar health polish | Amber "loading model" state, 2-poll debounce |
 | Episodic role labels | `User:`/`Assistant:` prefix in retrieved memories, typed `Role` enum |
 | Security hardening | CSP, removed shell permissions, path validation, input limits |
+| Deno toolchain | `deno.json` + setup/frontend runners; npm still supported |
+| Linux sidecar fetch | `fetch-sidecars-linux.sh` — llama tarball, Vulkan `.so` soname links |
+| Linux Parakeet auto-start | Managed CPU Python env + small launcher; app spawn + mic warm-up wait |
+| Empty `externalBin` | No compile-time bundled sidecars; wizard/setup populates `binaries/` |
 
 ---
 
 ## 🏗️ Next — STT migration to ort (in-process, CPU only)
 
-**Decision made:** Replace PyInstaller Parakeet server with native Rust `ort` inference.
+**Decision made:** Replace the Parakeet HTTP sidecar (Windows PyInstaller **or** Linux
+managed Python launcher) with native Rust `ort` inference.
 Full plan: `STT_ORT_MIGRATION.md`
 
 ### Architecture decision (locked)
@@ -51,10 +59,16 @@ CPU         →  STT via ort (Parakeet ONNX, in-process)
                Embeddings via llama-server CPU path
 ```
 
-### What this unlocks
-- Python dependency eliminated entirely
+### Current interim (works today)
+- **Windows:** frozen `parakeet-server` when present; port 5092
+- **Linux:** `deno task setup` writes a small executable launcher under
+  `binaries/parakeet/`; Tauri spawns it on startup (venv in `.cache/parakeet-tdt/`)
+- Mic fails fast (with warm-up wait) if `/healthz` never comes up
+
+### What ort unlocks
+- Python dependency eliminated entirely (including the Linux managed venv)
 - macOS unblocked — ONNX model is cross-platform, no rebuild needed
-- Thin installer: parakeet-server.exe (~48 MB frozen Python) removed from `externalBin`
+- Thin installer: no frozen Python binary / no `.cache/parakeet-tdt`
 - Port 5092 gone — direct function call, no network overhead
 - GPU fully free for LLM headroom
 
@@ -66,9 +80,10 @@ CPU         →  STT via ort (Parakeet ONNX, in-process)
 - [ ] Rewrite `audio/stt.rs` — `SttClient` holds `ort::Session` instead of `reqwest::Client`
 - [ ] Wire into `run_stt_loop` via `spawn_blocking`
 - [ ] Initialise `SttClient` in app setup, manage as app state
-- [ ] Remove parakeet from `tauri.conf.json` externalBin
+- [x] Remove parakeet from `tauri.conf.json` externalBin *(done — array is empty)*
 - [ ] Remove parakeet from monitor health-check loop
 - [ ] Remove parakeet row from `SidecarHealth.tsx`
+- [ ] Remove Linux `run-parakeet-linux.sh` / launcher path from setup
 - [ ] Test: English, non-native accent — confirm same or better accuracy
 - [ ] Confirm zero GPU memory used during STT
 
@@ -119,34 +134,14 @@ Low priority while UI is prototype stage.
 
 ---
 
-## Architecture quick reference
+## Docs
 
-### Hardware boundary (locked)
-
-| Resource | Owner | Rule |
-|----------|-------|------|
-| GPU VRAM | LLM only | Nothing else. Parakeet, Piper, embeddings — all CPU |
-| CPU | Everything audio/memory | STT (ort), TTS (Piper), LanceDB, embeddings |
-
-### Ports
-| Service | Port | Notes |
-|---------|------|-------|
-| llama chat | 18080 | GPU inference |
-| llama embed | 18081 | CPU, fixed to nomic-embed-text |
-| parakeet STT | 5092 | **Being eliminated** — replaced by in-process ort |
-
-### Binary sources
-| Binary | Source | Notes |
-|--------|--------|-------|
-| llama-server | ggerganov/llama.cpp | CPU build + Vulkan DLLs, wizard-downloaded |
-| parakeet-server | groxaxo/... PyInstaller | **Being eliminated** — ort migration in progress |
-| piper | rhasspy/piper | Subprocess, wizard-downloaded, unchanged |
-
-### Key files
 | File | Purpose |
 |------|---------|
-| `STT_ORT_MIGRATION.md` | Full ort migration plan |
-| `ARCHITECTURE.md` | Component inventory, decisions, alternatives |
-| `WORK_LOG.md` | Bug history, component history, decisions rationale |
-| `CONTRIBUTING.md` | Git workflow — branch → test → merge |
-| `SUPERVISOR.md` | AI session review checklist and hard constraints |
+| `ARCHITECTURE.md` | Current system — ports, binaries, decisions |
+| `SETUP.md` | Install and run |
+| `STT_ORT_MIGRATION.md` | Next STT migration (HTTP → ort) |
+| `WORK_LOG.md` | Bug history and rationale |
+| `CONTRIBUTING.md` | Branch → test → merge |
+| `SUPERVISOR.md` | AI review checklist |
+
