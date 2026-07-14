@@ -26,6 +26,8 @@ Runs on your machine — no cloud, no telemetry, no API keys required.
 
 > Voice input works on **Linux** (managed Parakeet launcher, auto-started with the app) and **Windows** (frozen sidecar when present). Long-term STT target is in-process `ort` — see `STT_ORT_MIGRATION.md`.
 
+Growth backlog (proactivity → ort → GPU offload → polish): [`ROADMAP.md`](ROADMAP.md).
+
 ---
 
 ## Quick start (Linux / Deno)
