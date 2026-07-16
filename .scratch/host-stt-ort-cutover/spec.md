@@ -1,4 +1,4 @@
-Status: ready-for-agent
+Status: ready-for-human
 
 # Spec: Host STT hard-cutover to Target STT (`ort`)
 
