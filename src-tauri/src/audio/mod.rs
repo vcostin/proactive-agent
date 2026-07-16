@@ -3,7 +3,9 @@ pub mod capture;
 pub mod stt;
 pub mod tts;
 
-pub use capture::AudioCapture;
+pub use capture::{
+    frame_rms, quiet_backend_probe_noise, resolve_input_device, resolve_output_device, AudioCapture,
+};
 pub use stt::SttClient;
 pub use tts::TtsClient;
 

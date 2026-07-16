@@ -340,8 +340,7 @@ mod tests {
 fn play_pcm_blocking(samples: &[f32], src_rate: u32, src_channels: u16) -> Result<()> {
     if samples.is_empty() { return Ok(()); }
     let host   = cpal::default_host();
-    let device = host.default_output_device()
-        .ok_or_else(|| anyhow::anyhow!("no output device"))?;
+    let device = crate::audio::resolve_output_device(&host)?;
     let config: cpal::StreamConfig = device.default_output_config()?.into();
     let dst_rate     = config.sample_rate.0;
     let dst_channels = config.channels as usize;

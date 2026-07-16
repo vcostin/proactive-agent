@@ -1,4 +1,4 @@
-mod audio;
+pub mod audio;
 pub mod binary_store;
 mod commands;
 pub mod constants;
@@ -32,6 +32,9 @@ pub type SharedProcessPids = Arc<std::sync::Mutex<Vec<u32>>>;
 pub type SharedAudioEnergy = Arc<std::sync::atomic::AtomicU32>;
 
 pub fn run() {
+    // Before any cpal/ALSA device probe (sidecars, TTS, mic).
+    audio::quiet_backend_probe_noise();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())

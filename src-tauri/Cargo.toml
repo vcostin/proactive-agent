@@ -2,6 +2,7 @@
 name = "proactive-agent"
 version = "0.1.0"
 edition = "2021"
+default-run = "proactive-agent"
 
 [lib]
 name = "proactive_agent_lib"
