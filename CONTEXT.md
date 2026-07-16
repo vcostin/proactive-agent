@@ -53,12 +53,12 @@ _Avoid_: development build, deno task
 ### Voice
 
 **Host STT path**:
-The speech-to-text integration used on the current Host OS (today: Parakeet HTTP sidecar / managed launcher). Out-of-box voice input on the Host OS means this path works via Setup Wizard / Setup repair. The next STT iteration promotes the Target STT path into this role via hard cutover — no dual Host STT path.
-_Avoid_: Whisper (retired), expand–contract dual STT
+The speech-to-text integration used on the current Host OS: in-process ONNX Runtime (`ort`) loading the Parakeet TDT ONNX encoder/decoder and vocabulary as app-managed artifacts (plus the app-managed ORT shared library). Out-of-box voice input on the Host OS means this path works via Setup Wizard / Setup repair. Soft-fail keeps the Core agent up with maximum Host-debuggable diagnostics.
+_Avoid_: Whisper (retired), Parakeet HTTP sidecar / `:5092` as the live path, expand–contract dual STT
 
 **Target STT path**:
-In-process ONNX Runtime (`ort`) STT using the same Parakeet ONNX model and tokens the Setup Wizard already installs. Planned to become the Host STT path via hard cutover; until that iteration ships, it is not the live Host path.
-_Avoid_: current sidecar as the end state, Python STT as the end state
+Historical name for in-process `ort` STT before Host cutover. After ADR 0001 cutover, this *is* the Host STT path — prefer “Host STT path” in new writing.
+_Avoid_: treating sidecar as the end state, Python STT as the end state
 
 **STT input contract**:
 The fixed audio format the Host STT path expects before inference: mono PCM at 16 kHz. The capture path adapts raw mic audio to this contract; device format is negotiated when a capture session starts (or restarts), and each utterance is converted using that session’s rate and channel layout. Not a Setup Wizard concern.

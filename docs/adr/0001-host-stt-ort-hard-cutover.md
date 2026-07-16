@@ -5,16 +5,16 @@ The Host STT path today is the Parakeet HTTP sidecar (Python / managed launcher 
 Expand–contract (ship both, then delete) was rejected: dual readiness and Setup repair surfaces (launcher *and* ort) delay the real done bar and fight the temporary-sidecar framing already in `STT_ORT_MIGRATION.md`. Merge is gated on mel spectrogram parity and fixture-transcript parity with the current sidecar; until then the sidecar remains the live Host path.
 
 **Verification gate (Host merge / sidecar delete):**
-1. Mel unit test: fixture PCM → Rust mel vs Python/`onnx-asr` reference within ±1e-4.
-2. Fixture transcript parity: small checked-in WAV set; `ort` greedy CTC matches (or agreed-normalize-matches) current sidecar on those clips.
+1. Mel unit test: fixture PCM → Rust/ort nemo128 (onnx-asr preprocessor) vs Python/`onnx-asr` reference within ±1e-4.
+2. Fixture transcript parity: small checked-in WAV set; `ort` greedy **TDT** matches (or agreed-normalize-matches) current sidecar behaviour on those clips.
 3. CPU-only STT execution provider; no STT GPU/VRAM use.
-4. Artifact/readiness tests: Host STT ready = model + tokens + ONNX Runtime lib; launcher gone from catalog/ready; soft-fail emits rich Host diagnostics.
+4. Artifact/readiness tests: Host STT ready = encoder + decoder + vocab + ONNX Runtime lib; launcher gone from catalog/ready; soft-fail emits rich Host diagnostics.
 5. Cleanup: no `parakeet-server` / `:5092` / SidecarHealth parakeet row / wizard launcher row on the Host path.
 6. Manual Host mic smoke is necessary but not sufficient.
 
 Accent/latency checks from exploratory checklists are smoke only, not merge blockers.
 
-**Consequences:** This cutover matches today’s effective decoding (greedy CTC; no `prompt` / temperature / LM biasing). Face/space-style errors attributed to missing decoder priors are explicitly out of scope — a follow-up after Host STT is `ort`, not a gate on removing the sidecar.
+**Consequences:** This cutover matches today’s effective decoding (greedy **TDT** on the Parakeet TDT 0.6B v3 export; no `prompt` / temperature / LM biasing). The earlier “CTC” wording in exploratory notes was incorrect relative to the live Host sidecar (`nemo-conformer-tdt`). Face/space-style errors attributed to missing decoder priors are explicitly out of scope — a follow-up after Host STT is `ort`, not a gate on removing the sidecar.
 
 Guest OS is not in this iteration’s STT done bar: compile-safe Platform-module isolation and graceful degrade (Core agent stays up; STT may remain not-ready). Full Guest `ort` parity waits until that OS is Host or is explicitly scheduled. Host `ort` work must stay modular (Platform module / OS-specific seams) so shared core does not assume a working Guest STT path.
 

@@ -75,42 +75,58 @@
       "required_for_stt": false
     },
     {
-      "id": "stt-model",
+      "id": "stt-encoder",
       "kind": "model",
       "root": "binaries",
       "relative_dir": "parakeet/models",
-      "filename": "parakeet-tdt-0.6b-v3.onnx",
+      "filename": "encoder-model.int8.onnx",
       "sidecar_name": false,
       "source": {
         "type": "url",
-        "url": "https://huggingface.co/groxaxo/parakeet-tdt-0.6b-v3-fastapi-openai/resolve/main/parakeet-tdt-0.6b-v3.onnx"
+        "url": "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/encoder-model.int8.onnx"
       },
       "required_for_core": false,
       "required_for_stt": true
     },
     {
-      "id": "stt-tokens",
+      "id": "stt-decoder",
+      "kind": "model",
+      "root": "binaries",
+      "relative_dir": "parakeet/models",
+      "filename": "decoder_joint-model.int8.onnx",
+      "sidecar_name": false,
+      "source": {
+        "type": "url",
+        "url": "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/decoder_joint-model.int8.onnx"
+      },
+      "required_for_core": false,
+      "required_for_stt": true
+    },
+    {
+      "id": "stt-vocab",
       "kind": "data",
       "root": "binaries",
       "relative_dir": "parakeet/models",
-      "filename": "parakeet-tdt-0.6b-v3-tokens.txt",
+      "filename": "vocab.txt",
       "sidecar_name": false,
       "source": {
         "type": "url",
-        "url": "https://huggingface.co/groxaxo/parakeet-tdt-0.6b-v3-fastapi-openai/resolve/main/parakeet-tdt-0.6b-v3-tokens.txt"
+        "url": "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/vocab.txt"
       },
       "required_for_core": false,
       "required_for_stt": true
     },
     {
-      "id": "parakeet-server",
-      "kind": "sidecar",
+      "id": "onnxruntime",
+      "kind": "data",
       "root": "binaries",
-      "relative_dir": "",
-      "filename": "parakeet-server",
-      "sidecar_name": true,
+      "relative_dir": "ort",
+      "filename": "libonnxruntime.so",
+      "sidecar_name": false,
       "source": {
-        "type": "manual"
+        "type": "github_release",
+        "repo": "microsoft/onnxruntime",
+        "pattern": "onnxruntime-linux-x64-"
       },
       "required_for_core": false,
       "required_for_stt": true

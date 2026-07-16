@@ -126,7 +126,7 @@ pub fn artifact_ready(def: &ArtifactDef, roots: &LayoutRoots) -> bool {
                 let name = e.file_name();
                 let s = name.to_string_lossy();
                 e.file_type().map(|t| t.is_file()).unwrap_or(false)
-                    && (s.contains(".so") || s.ends_with(".dll"))
+                    && (s.contains(".so") || s.ends_with(".dll") || s.ends_with(".dylib"))
             })
         }
     }
@@ -237,21 +237,14 @@ mod tests {
         let models = root.join("models");
         write_sidecar(&binaries, "llama-server");
         fs::create_dir_all(models.join("tts")).unwrap();
-        fs::write(
-            binaries
-                .join("parakeet")
-                .join("models")
-                .join(crate::constants::STT_MODEL_FILE),
-            vec![0u8; 32],
-        )
-        .ok();
-        // create parent for STT
-        let stt = binaries
-            .join("parakeet")
-            .join("models")
-            .join(crate::constants::STT_MODEL_FILE);
-        fs::create_dir_all(stt.parent().unwrap()).unwrap();
-        fs::write(&stt, vec![0u8; 32]).unwrap();
+        let stt = binaries.join("parakeet").join("models");
+        fs::create_dir_all(&stt).unwrap();
+        fs::write(stt.join(crate::constants::STT_ENCODER_FILE), vec![0u8; 32]).unwrap();
+        fs::write(stt.join(crate::constants::STT_DECODER_FILE), vec![0u8; 32]).unwrap();
+        fs::write(stt.join(crate::constants::STT_VOCAB_FILE), vec![0u8; 32]).unwrap();
+        let ort = binaries.join(crate::constants::ORT_LIB_REL_DIR);
+        fs::create_dir_all(&ort).unwrap();
+        fs::write(ort.join(crate::constants::ORT_LIB_FILENAME), vec![0u8; 32]).unwrap();
         fs::write(
             models.join(crate::constants::EMBED_MODEL_FILE),
             vec![0u8; 32],
@@ -265,8 +258,14 @@ mod tests {
         assert!(by_id("llama-server").ready);
         assert!(!by_id("piper").ready);
         assert!(by_id("embed-model").ready);
-        assert!(by_id("stt-model").ready);
-        assert!(!by_id("parakeet-server").ready);
+        assert!(by_id("stt-encoder").ready);
+        assert!(by_id("stt-decoder").ready);
+        assert!(by_id("stt-vocab").ready);
+        assert!(by_id("onnxruntime").ready);
+        assert!(
+            statuses.iter().all(|s| s.id != "parakeet-server"),
+            "parakeet-server must be gone from Host catalog"
+        );
 
         let _ = fs::remove_dir_all(&root);
     }

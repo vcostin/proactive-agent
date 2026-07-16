@@ -141,19 +141,22 @@ pub fn start_capture() -> Result<(VoiceHandle, mpsc::Receiver<Vec<f32>>)> {
 /// Run the STT loop: accumulate VAD frames, transcribe on silence,
 /// emit `voice_transcript` events to the frontend.
 /// Exits when the audio channel closes (i.e. VoiceHandle is dropped).
+///
+/// When `stt` is `None`, transcription stays off (soft-fail / not ready) while
+/// the mic path can still deliver frames for waveform/debug.
 pub async fn run_stt_loop(
     mut audio_rx: mpsc::Receiver<Vec<f32>>,
-    stt_port: u16,
+    stt: Option<std::sync::Arc<SttClient>>,
     sample_rate: u32,
     channels: u16,
     app_handle: tauri::AppHandle,
 ) {
     debug_event(&app_handle, format!(
-        "STT loop started — device: {sample_rate} Hz {channels}ch → target: {} Hz mono",
-        crate::constants::STT_SAMPLE_RATE
+        "STT loop started — device: {sample_rate} Hz {channels}ch → target: {} Hz mono; engine={}",
+        crate::constants::STT_SAMPLE_RATE,
+        if stt.is_some() { "in-process ort" } else { "unavailable (transcription off)" }
     ));
 
-    let stt = SttClient::new(stt_port);
     let mut buffer: Vec<f32> = Vec::new();
     let mut frames_received: u64 = 0;
     let mut last_frame_log = std::time::Instant::now();
@@ -200,22 +203,39 @@ pub async fn run_stt_loop(
                     };
 
                     let boosted = amplify(&prepared, MIC_GAIN);
-                    match stt.transcribe(&boosted, out_rate, 1).await {
-                        Ok(text) => {
-                            let cleaned = clean_transcript(&text);
-                            if !cleaned.is_empty() {
-                                let _ = app_handle.emit("voice_transcript", cleaned);
-                            } else if !text.trim().is_empty() {
-                                debug_event(&app_handle, format!(
-                                    "STT discarded as hallucination/noise: {text:?}"
-                                ));
+                    if let Some(client) = stt.clone() {
+                        let audio = boosted.clone();
+                        let result = tokio::task::spawn_blocking(move || {
+                            client.transcribe(&audio, out_rate, 1)
+                        })
+                        .await;
+                        match result {
+                            Ok(Ok(text)) => {
+                                let cleaned = clean_transcript(&text);
+                                if !cleaned.is_empty() {
+                                    let _ = app_handle.emit("voice_transcript", cleaned);
+                                } else if !text.trim().is_empty() {
+                                    debug_event(&app_handle, format!(
+                                        "STT discarded as hallucination/noise: {text:?}"
+                                    ));
+                                }
+                            }
+                            Ok(Err(e)) => {
+                                let msg = format!("STT transcribe error: {e:#}");
+                                debug_event(&app_handle, msg.clone());
+                                let _ = app_handle.emit("voice_error", msg);
+                            }
+                            Err(e) => {
+                                let msg = format!("STT blocking task join error: {e}");
+                                debug_event(&app_handle, msg.clone());
+                                let _ = app_handle.emit("voice_error", msg);
                             }
                         }
-                        Err(e) => {
-                            let msg = format!("STT transcribe error: {e}");
-                            debug_event(&app_handle, msg.clone());
-                            let _ = app_handle.emit("voice_error", msg);
-                        }
+                    } else {
+                        debug_event(
+                            &app_handle,
+                            "STT utterance skipped — engine unavailable (Setup repair)".into(),
+                        );
                     }
                     buffer.clear();
                 }

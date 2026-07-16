@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Downloads llama-server (CPU + Vulkan libs), Piper TTS, and base models
-# for proactive-agent on Linux x86_64.
+# Downloads llama-server (CPU + Vulkan libs), Piper TTS, Host STT artifacts
+# (Parakeet TDT ONNX + ONNX Runtime), and base models for proactive-agent on
+# Linux x86_64.
 #
 # Artifact names / fetch sources / destinations come from the Platform-module
 # projection at scripts/artifacts/linux.json (generated from Rust SSOT).
@@ -119,6 +120,15 @@ TTS_URL="$(catalog_field tts-voice source.url)"
 TTS_FILE="$(catalog_field tts-voice filename)"
 EMBED_URL="$(catalog_field embed-model source.url)"
 EMBED_FILE="$(catalog_field embed-model filename)"
+STT_ENC_URL="$(catalog_field stt-encoder source.url)"
+STT_ENC_FILE="$(catalog_field stt-encoder filename)"
+STT_DEC_URL="$(catalog_field stt-decoder source.url)"
+STT_DEC_FILE="$(catalog_field stt-decoder filename)"
+STT_VOCAB_URL="$(catalog_field stt-vocab source.url)"
+STT_VOCAB_FILE="$(catalog_field stt-vocab filename)"
+ORT_REPO="$(catalog_field onnxruntime source.repo)"
+ORT_PAT="$(catalog_field onnxruntime source.pattern)"
+ORT_REL_DIR="$(catalog_field onnxruntime relative_dir)"
 
 echo
 echo "[1/3] llama.cpp (CPU server + Vulkan shared libs when available)"
@@ -230,7 +240,7 @@ else
 fi
 
 echo
-echo "[3/3] Models"
+echo "[3/5] Models"
 
 EMBED="$MODELS_DIR/$EMBED_FILE"
 if [[ ! -f "$EMBED" ]]; then
@@ -242,13 +252,59 @@ else
 fi
 
 echo
-echo "[4/4] Parakeet STT (auto-started with the app)"
-if bash "$ROOT/scripts/run-parakeet-linux.sh" --install; then
-  echo "  OK parakeet launcher → binaries/parakeet/"
+echo "[4/5] Host STT model artifacts (Parakeet TDT ONNX)"
+STT_DIR="$BIN_DIR/parakeet/models"
+mkdir -p "$STT_DIR"
+for pair in \
+  "$STT_ENC_URL|$STT_ENC_FILE" \
+  "$STT_DEC_URL|$STT_DEC_FILE" \
+  "$STT_VOCAB_URL|$STT_VOCAB_FILE"
+do
+  url="${pair%%|*}"
+  file="${pair##*|}"
+  dest="$STT_DIR/$file"
+  if [[ -f "$dest" && $(stat -c%s "$dest" 2>/dev/null || echo 0) -gt 1024 ]]; then
+    echo "  OK $file (already present)"
+  else
+    echo "  Downloading $file..."
+    download "$url" "$dest"
+    echo "  OK $file"
+  fi
+done
+
+echo
+echo "[5/5] ONNX Runtime (app-managed Host STT library)"
+ORT_DIR="$BIN_DIR/$ORT_REL_DIR"
+mkdir -p "$ORT_DIR"
+if find "$ORT_DIR" -maxdepth 1 -type f \( -name '*.so' -o -name '*.so.*' \) | grep -q .; then
+  echo "  OK onnxruntime (already present)"
 else
-  echo "  WARN: Parakeet install failed — voice input disabled until fixed"
-  echo "        Re-run: deno task parakeet:linux"
-  mkdir -p "$BIN_DIR/parakeet"
+  ORT_JSON="$(github_latest_assets "$ORT_REPO")"
+  ORT_TAG="$(release_tag "$ORT_JSON")"
+  echo "      Release: $ORT_TAG"
+  ORT_URL="$(find_asset_url "$ORT_JSON" "$ORT_PAT")"
+  # Prefer CPU linux-x64 tarball (exclude gpu)
+  if [[ -z "$ORT_URL" ]] || [[ "$ORT_URL" == *gpu* ]]; then
+    ORT_URL="$(echo "$ORT_JSON" | python3 -c '
+import json,sys
+data=json.load(sys.stdin)
+for a in data.get("assets", []):
+    name=a.get("name") or ""
+    if "onnxruntime-linux-x64-" in name and "gpu" not in name and name.endswith(".tgz"):
+        print(a["browser_download_url"]); break
+')"
+  fi
+  if [[ -z "$ORT_URL" ]]; then
+    echo "error: no onnxruntime-linux-x64 tarball in $ORT_TAG" >&2
+    exit 1
+  fi
+  download "$ORT_URL" "$TMP/ort.tgz"
+  mkdir -p "$TMP/ort"
+  tar -xzf "$TMP/ort.tgz" -C "$TMP/ort"
+  find "$TMP/ort" -type f \( -name 'libonnxruntime.so' -o -name 'libonnxruntime.so.*' \) \
+    -exec cp -n {} "$ORT_DIR/" \;
+  ensure_soname_links "$ORT_DIR"
+  echo "  OK onnxruntime → binaries/$ORT_REL_DIR/"
 fi
 
 echo

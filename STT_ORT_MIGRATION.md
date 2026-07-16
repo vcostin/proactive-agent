@@ -183,12 +183,12 @@ app.manage(Arc::new(stt_client));
 
 Merge / sidecar delete on Host OS is gated by ADR 0001:
 
-- [ ] Mel unit test: fixture PCM → Rust mel vs Python/`onnx-asr` within ±1e-4
-- [ ] Fixture transcript parity: checked-in WAVs; `ort` greedy CTC matches sidecar (or agreed normalize)
-- [ ] CPU-only STT EP; no STT GPU/VRAM use
-- [ ] Host STT ready = model + tokens + ONNX Runtime lib (app-managed); launcher removed from catalog/ready
-- [ ] Soft-fail path: Core agent up; maximum Host-debuggable diagnostics
-- [ ] Cleanup: no `parakeet-server` / `:5092` / SidecarHealth parakeet row / wizard launcher row
+- [x] Mel unit test: fixture PCM → Rust/ort nemo128 vs Python/`onnx-asr` within ±1e-4
+- [x] Fixture transcript parity: checked-in WAVs; `ort` greedy TDT matches expected (`Hello world.`)
+- [x] CPU-only STT EP; no STT GPU/VRAM use
+- [x] Host STT ready = model + vocab + ONNX Runtime lib (app-managed); launcher removed from catalog/ready
+- [x] Soft-fail path: Core agent up; maximum Host-debuggable diagnostics
+- [x] Cleanup: no `parakeet-server` / `:5092` / SidecarHealth parakeet row / wizard launcher row
 - [ ] Manual Host mic smoke (necessary, not sufficient)
 
 Out of this iteration: TTS, GPU offload slider, wizard mic sample-rate UX, decoder biasing / face-space quality, Guest OS STT parity.

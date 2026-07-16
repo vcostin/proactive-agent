@@ -13,9 +13,8 @@ pub const SIDECAR_HOST: &str = "127.0.0.1";
 
 // ── Audio ─────────────────────────────────────────────────────────────────────
 
-/// Target sample rate for STT input. Parakeet TDT (and Whisper) were trained
-/// on 16 kHz mono audio — sending the native device rate and relying on the
-/// server to resample gives lower quality than doing it ourselves with rubato.
+/// Target sample rate for STT input. Parakeet TDT expects 16 kHz mono —
+/// the capture path negotiates device format then converts to this contract.
 pub const STT_SAMPLE_RATE: u32 = 16_000;
 
 // ── Model filenames ───────────────────────────────────────────────────────────
@@ -31,11 +30,28 @@ pub const EMBED_MODEL_ALIAS: &str = "nomic-embed-text";
 /// Piper TTS voice model filename inside `models/tts/`.
 pub const TTS_MODEL_FILE: &str = "en_US-lessac-medium.onnx";
 
-/// Parakeet STT ONNX model filename inside `binaries/parakeet/models/`.
-pub const STT_MODEL_FILE: &str = "parakeet-tdt-0.6b-v3.onnx";
+/// Directory under binaries/ holding Host STT model artifacts.
+pub const STT_MODEL_REL_DIR: &str = "parakeet/models";
 
-/// Parakeet STT vocabulary/tokens file alongside the ONNX model.
-pub const STT_TOKENS_FILE: &str = "parakeet-tdt-0.6b-v3-tokens.txt";
+/// Parakeet TDT encoder ONNX (int8) inside `binaries/parakeet/models/`.
+pub const STT_ENCODER_FILE: &str = "encoder-model.int8.onnx";
+
+/// Parakeet TDT decoder-joint ONNX (int8) inside `binaries/parakeet/models/`.
+pub const STT_DECODER_FILE: &str = "decoder_joint-model.int8.onnx";
+
+/// Parakeet TDT vocabulary file alongside the ONNX models.
+pub const STT_VOCAB_FILE: &str = "vocab.txt";
+
+/// Directory under binaries/ for the app-managed ONNX Runtime shared library.
+pub const ORT_LIB_REL_DIR: &str = "ort";
+
+/// Documented ORT shared-library basename (verify uses SharedLibPresent).
+#[cfg(target_os = "windows")]
+pub const ORT_LIB_FILENAME: &str = "onnxruntime.dll";
+#[cfg(target_os = "macos")]
+pub const ORT_LIB_FILENAME: &str = "libonnxruntime.dylib";
+#[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+pub const ORT_LIB_FILENAME: &str = "libonnxruntime.so";
 
 // ── Download URLs ─────────────────────────────────────────────────────────────
 
@@ -44,13 +60,17 @@ pub const STT_TOKENS_FILE: &str = "parakeet-tdt-0.6b-v3-tokens.txt";
 pub const EMBED_MODEL_URL: &str =
     "https://huggingface.co/nomic-ai/nomic-embed-text-v1.5-GGUF/resolve/main/nomic-embed-text-v1.5.Q8_0.gguf";
 
-/// Parakeet TDT ONNX model download from HuggingFace.
-pub const STT_MODEL_URL: &str =
-    "https://huggingface.co/groxaxo/parakeet-tdt-0.6b-v3-fastapi-openai/resolve/main/parakeet-tdt-0.6b-v3.onnx";
+/// Parakeet TDT encoder download (istupakov/parakeet-tdt-0.6b-v3-onnx).
+pub const STT_ENCODER_URL: &str =
+    "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/encoder-model.int8.onnx";
 
-/// Parakeet vocabulary file download.
-pub const STT_TOKENS_URL: &str =
-    "https://huggingface.co/groxaxo/parakeet-tdt-0.6b-v3-fastapi-openai/resolve/main/parakeet-tdt-0.6b-v3-tokens.txt";
+/// Parakeet TDT decoder-joint download.
+pub const STT_DECODER_URL: &str =
+    "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/decoder_joint-model.int8.onnx";
+
+/// Parakeet vocabulary download.
+pub const STT_VOCAB_URL: &str =
+    "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/main/vocab.txt";
 
 /// Visual C++ Redistributable 2022 x64 silent installer from Microsoft.
 /// TODO: pin to a specific versioned URL and update VCREDIST_SHA256 when bumping.

@@ -3,9 +3,9 @@
 export interface BinariesStatus {
   llama_ready: boolean;
   piper_ready: boolean;
-  /** Always false until manually provided — no public release URL */
-  parakeet_ready: boolean;
-  parakeet_note: string;
+  /** App-managed ONNX Runtime library under binaries/ort/ */
+  ort_ready: boolean;
+  ort_note: string;
 }
 
 export interface SetupStatus {
@@ -13,9 +13,11 @@ export interface SetupStatus {
   ready: boolean;
   chat_model: string;
   embed_model_ready: boolean;
-  /** Parakeet TDT ONNX model files present */
+  /** Parakeet TDT encoder + decoder ONNX present */
   stt_model_ready: boolean;
-  /** Host STT path: ONNX model + parakeet launcher both present */
+  /** Vocabulary file present */
+  stt_vocab_ready: boolean;
+  /** Host STT path: model + vocab + ONNX Runtime lib */
   stt_ready: boolean;
   data_dir: string;
   binaries: BinariesStatus;

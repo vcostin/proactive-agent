@@ -55,7 +55,7 @@ impl AppConfig {
             db_path,
             llama_port: 18080,
             embed_port: 18081,
-            stt_port: 5092,  // parakeet-server default port
+            stt_port: 5092, // legacy config field; Host STT is in-process (no port)
             audio_device: None,
             embed_model: crate::constants::EMBED_MODEL_ALIAS.to_string(),
             embed_model_file: crate::constants::EMBED_MODEL_FILE.to_string(),
@@ -105,12 +105,18 @@ impl AppConfig {
         self.models_dir.join(&self.embed_model_file)
     }
 
-    /// Path where Parakeet model files are expected.
+    /// Path where Parakeet TDT model files are expected.
     pub fn stt_model_dir() -> PathBuf {
-        crate::binaries_dir().join("parakeet").join("models")
+        crate::binaries_dir().join(crate::constants::STT_MODEL_REL_DIR)
     }
 
     pub fn stt_model_ready() -> bool {
-        Self::stt_model_dir().join(crate::constants::STT_MODEL_FILE).exists()
+        crate::setup::status::stt_model_ready_in(&crate::binaries_dir())
+            && crate::setup::status::stt_vocab_ready_in(&crate::binaries_dir())
+    }
+
+    /// App-managed ONNX Runtime library directory.
+    pub fn ort_lib_dir() -> PathBuf {
+        crate::binaries_dir().join(crate::constants::ORT_LIB_REL_DIR)
     }
 }

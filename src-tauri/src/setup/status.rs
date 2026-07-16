@@ -2,7 +2,7 @@
 //!
 //! Core agent readiness = chat model present + llama-server ready.
 //! Piper/TTS is reported but never required for main UI.
-//! Host STT readiness = STT model file + parakeet launcher, reported separately.
+//! Host STT readiness = encoder + decoder + vocab + ONNX Runtime lib.
 
 use std::path::{Path, PathBuf};
 
@@ -16,9 +16,11 @@ pub struct SetupProbe {
     pub chat_model_present: bool,
     pub llama_ready: bool,
     pub piper_ready: bool,
-    pub parakeet_ready: bool,
+    pub ort_lib_ready: bool,
     pub embed_model_ready: bool,
+    /// Encoder + decoder ONNX present.
     pub stt_model_ready: bool,
+    pub stt_vocab_ready: bool,
 }
 
 /// Core agent can reach the main UI: chat model + inference sidecar.
@@ -27,32 +29,24 @@ pub fn core_agent_ready(probe: &SetupProbe) -> bool {
     probe.chat_model_present && probe.llama_ready
 }
 
-/// Host STT path (mic → text) app-managed pieces are both present.
+/// Host STT path (mic → text) app-managed pieces are all present.
 pub fn host_stt_ready(probe: &SetupProbe) -> bool {
-    probe.stt_model_ready && probe.parakeet_ready
+    probe.stt_model_ready && probe.stt_vocab_ready && probe.ort_lib_ready
 }
 
-/// Probe sidecar readiness under an arbitrary binaries root (fixture tests).
+/// Probe sidecar / ORT readiness under an arbitrary binaries root (fixture tests).
 pub fn check_binaries_in(binaries_root: &Path) -> BinariesStatus {
     BinariesStatus {
         llama_ready: find_sidecar_in(binaries_root, "llama-server").is_some(),
         piper_ready: find_sidecar_in(binaries_root, "piper").is_some(),
-        parakeet_ready: find_sidecar_in(binaries_root, "parakeet-server").is_some(),
-        parakeet_note: parakeet_note(),
+        ort_ready: ort_lib_ready_in(binaries_root),
+        ort_note: ort_note(),
     }
 }
 
-fn parakeet_note() -> String {
-    #[cfg(target_os = "linux")]
-    {
-        "Host STT path: managed launcher under binaries/parakeet/ (repair via Setup Wizard)."
-            .into()
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        "Speech-to-text requires a Platform-module / manual install. Open Setup repair when ready."
-            .into()
-    }
+fn ort_note() -> String {
+    "Host STT path: app-managed ONNX Runtime library under binaries/ort/ (repair via Setup Wizard)."
+        .into()
 }
 
 /// Locate a sidecar under `binaries_root` using the same layout rules as production.
@@ -69,13 +63,36 @@ pub fn find_sidecar_in(binaries_root: &Path, name: &str) -> Option<PathBuf> {
         .find(|p| crate::sidecar_file_usable(p))
 }
 
-/// Whether the STT ONNX model file exists under a binaries root.
+fn stt_models_dir(binaries_root: &Path) -> PathBuf {
+    binaries_root.join(constants::STT_MODEL_REL_DIR)
+}
+
+/// Whether encoder + decoder ONNX files exist under a binaries root.
 pub fn stt_model_ready_in(binaries_root: &Path) -> bool {
-    binaries_root
-        .join("parakeet")
-        .join("models")
-        .join(constants::STT_MODEL_FILE)
-        .exists()
+    let dir = stt_models_dir(binaries_root);
+    dir.join(constants::STT_ENCODER_FILE).is_file()
+        && dir.join(constants::STT_DECODER_FILE).is_file()
+}
+
+/// Whether the STT vocabulary file exists under a binaries root.
+pub fn stt_vocab_ready_in(binaries_root: &Path) -> bool {
+    stt_models_dir(binaries_root)
+        .join(constants::STT_VOCAB_FILE)
+        .is_file()
+}
+
+/// Whether an ONNX Runtime shared library is present under binaries/ort/.
+pub fn ort_lib_ready_in(binaries_root: &Path) -> bool {
+    let dir = binaries_root.join(constants::ORT_LIB_REL_DIR);
+    let Ok(rd) = std::fs::read_dir(&dir) else {
+        return false;
+    };
+    rd.filter_map(Result::ok).any(|e| {
+        let name = e.file_name();
+        let s = name.to_string_lossy();
+        e.file_type().map(|t| t.is_file()).unwrap_or(false)
+            && (s.contains(".so") || s.ends_with(".dll") || s.ends_with(".dylib"))
+    })
 }
 
 /// Whether the embed model file exists under a models root.
@@ -94,9 +111,10 @@ pub fn probe_layout(
         chat_model_present: !chat_model.as_os_str().is_empty() && chat_model.exists(),
         llama_ready: binaries.llama_ready,
         piper_ready: binaries.piper_ready,
-        parakeet_ready: binaries.parakeet_ready,
+        ort_lib_ready: binaries.ort_ready,
         embed_model_ready: embed_model_ready_in(models_dir),
         stt_model_ready: stt_model_ready_in(binaries_root),
+        stt_vocab_ready: stt_vocab_ready_in(binaries_root),
     }
 }
 
@@ -107,9 +125,11 @@ pub struct SetupStatus {
     pub ready: bool,
     pub chat_model: String,
     pub embed_model_ready: bool,
-    /// Parakeet TDT ONNX model file present under binaries/parakeet/models/
+    /// Encoder + decoder ONNX present under binaries/parakeet/models/.
     pub stt_model_ready: bool,
-    /// Host STT path ready: ONNX model + parakeet launcher both present.
+    /// Vocabulary file present.
+    pub stt_vocab_ready: bool,
+    /// Host STT path ready: model files + vocab + ONNX Runtime lib.
     pub stt_ready: bool,
     pub data_dir: String,
     pub binaries: BinariesStatus,
@@ -129,6 +149,7 @@ pub fn build_setup_status(
         chat_model: chat_model.to_string(),
         embed_model_ready: probe.embed_model_ready,
         stt_model_ready: probe.stt_model_ready,
+        stt_vocab_ready: probe.stt_vocab_ready,
         stt_ready: host_stt_ready(&probe),
         data_dir,
         binaries,
@@ -155,7 +176,6 @@ mod tests {
         let dir = root.join(short);
         fs::create_dir_all(&dir).unwrap();
         let path = dir.join(&filename);
-        // Unix usability gate: >32 bytes + executable bit
         fs::write(&path, vec![0u8; 64]).unwrap();
         #[cfg(unix)]
         {
@@ -173,15 +193,29 @@ mod tests {
         fs::write(path, vec![0u8; bytes]).unwrap();
     }
 
+    fn write_stt_artifacts(binaries: &Path) {
+        let models = binaries.join(constants::STT_MODEL_REL_DIR);
+        write_file(&models.join(constants::STT_ENCODER_FILE), 128);
+        write_file(&models.join(constants::STT_DECODER_FILE), 128);
+        write_file(&models.join(constants::STT_VOCAB_FILE), 64);
+        write_file(
+            &binaries
+                .join(constants::ORT_LIB_REL_DIR)
+                .join(constants::ORT_LIB_FILENAME),
+            64,
+        );
+    }
+
     #[test]
     fn core_agent_ready_requires_chat_model_and_llama_not_piper() {
         let base = SetupProbe {
             chat_model_present: true,
             llama_ready: true,
             piper_ready: false,
-            parakeet_ready: false,
+            ort_lib_ready: false,
             embed_model_ready: false,
             stt_model_ready: false,
+            stt_vocab_ready: false,
         };
         assert!(core_agent_ready(&base));
         assert!(!core_agent_ready(&SetupProbe {
@@ -195,14 +229,15 @@ mod tests {
     }
 
     #[test]
-    fn host_stt_ready_requires_model_and_launcher() {
+    fn host_stt_ready_requires_model_vocab_and_ort_not_launcher() {
         let base = SetupProbe {
             chat_model_present: true,
             llama_ready: true,
             piper_ready: true,
-            parakeet_ready: true,
+            ort_lib_ready: true,
             embed_model_ready: true,
             stt_model_ready: true,
+            stt_vocab_ready: true,
         };
         assert!(host_stt_ready(&base));
         assert!(!host_stt_ready(&SetupProbe {
@@ -210,7 +245,11 @@ mod tests {
             ..base.clone()
         }));
         assert!(!host_stt_ready(&SetupProbe {
-            parakeet_ready: false,
+            stt_vocab_ready: false,
+            ..base.clone()
+        }));
+        assert!(!host_stt_ready(&SetupProbe {
+            ort_lib_ready: false,
             ..base
         }));
     }
@@ -281,14 +320,7 @@ mod tests {
         let chat = models.join("chat.gguf");
         write_sidecar(&binaries, "llama-server");
         write_file(&chat, 128);
-        write_sidecar(&binaries, "parakeet-server");
-        write_file(
-            &binaries
-                .join("parakeet")
-                .join("models")
-                .join(constants::STT_MODEL_FILE),
-            128,
-        );
+        write_stt_artifacts(&binaries);
 
         let status = build_setup_status(
             chat.to_str().unwrap(),
@@ -299,10 +331,44 @@ mod tests {
 
         assert!(status.ready);
         assert!(status.stt_model_ready);
-        assert!(status.binaries.parakeet_ready);
+        assert!(status.stt_vocab_ready);
+        assert!(status.binaries.ort_ready);
         assert!(status.stt_ready);
         // Piper still optional for Core agent
         assert!(!status.binaries.piper_ready);
+        // Launcher absence must not block Host STT ready
+        assert!(
+            find_sidecar_in(&binaries, "parakeet-server").is_none(),
+            "fixture has no launcher; ready must not require it"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn fixture_stt_not_ready_without_ort_even_with_model_files() {
+        let root = unique_temp("stt-no-ort");
+        let binaries = root.join("binaries");
+        let models = root.join("models");
+        let chat = models.join("chat.gguf");
+        write_sidecar(&binaries, "llama-server");
+        write_file(&chat, 128);
+        let stt = binaries.join(constants::STT_MODEL_REL_DIR);
+        write_file(&stt.join(constants::STT_ENCODER_FILE), 128);
+        write_file(&stt.join(constants::STT_DECODER_FILE), 128);
+        write_file(&stt.join(constants::STT_VOCAB_FILE), 64);
+
+        let status = build_setup_status(
+            chat.to_str().unwrap(),
+            &models,
+            &binaries,
+            root.to_string_lossy().into(),
+        );
+        assert!(status.ready);
+        assert!(status.stt_model_ready);
+        assert!(status.stt_vocab_ready);
+        assert!(!status.binaries.ort_ready);
+        assert!(!status.stt_ready);
 
         let _ = fs::remove_dir_all(&root);
     }

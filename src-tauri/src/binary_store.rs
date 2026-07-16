@@ -1,11 +1,8 @@
 /// binary_store.rs — Download and extract sidecar binaries from GitHub releases.
 ///
-/// Each binary (llama-server, piper) has a known release pattern per OS/arch.
-/// The wizard calls `download_required_binaries()` on first run so the user
-/// never has to touch a terminal.
-///
-/// Parakeet is intentionally excluded — it has no public release URL and
-/// requires a manual PyInstaller build. That's tracked in ROADMAP § Needs Decision.
+/// Each binary (llama-server, piper, onnxruntime) has a known release pattern
+/// per OS/arch. The wizard calls `download_required_binaries()` on first run so
+/// the user never has to touch a terminal.
 
 use anyhow::{bail, Context, Result};
 use futures::StreamExt;
@@ -70,12 +67,12 @@ mod platform {
 
 #[derive(serde::Serialize, Clone)]
 pub struct BinariesStatus {
-    pub llama_ready:    bool,
-    pub piper_ready:    bool,
-    /// Always false until the user manually provides it — see ROADMAP § Needs Decision
-    pub parakeet_ready: bool,
-    /// Human-readable note shown in the wizard for parakeet
-    pub parakeet_note:  String,
+    pub llama_ready: bool,
+    pub piper_ready: bool,
+    /// App-managed ONNX Runtime shared library under binaries/ort/.
+    pub ort_ready: bool,
+    /// Human-readable note shown in the wizard for ORT.
+    pub ort_note: String,
 }
 
 pub fn check_binaries() -> BinariesStatus {
@@ -85,10 +82,10 @@ pub fn check_binaries() -> BinariesStatus {
 
 // ── Download entry point ──────────────────────────────────────────────────────
 
-/// Download llama-server (required for Core agent) and piper (optional TTS).
+/// Download llama-server (required for Core agent), piper (optional TTS),
+/// and the ONNX Runtime shared library (Host STT).
 /// Emits `download_progress` events throughout.
 /// Piper failure does not fail the overall download — TTS is out of the Host completion bar.
-/// Parakeet is intentionally skipped (Manual catalog source).
 pub async fn download_all(app: &tauri::AppHandle) -> Result<()> {
     let client = Client::builder()
         .user_agent("proactive-agent/1.0")
@@ -108,6 +105,14 @@ pub async fn download_all(app: &tauri::AppHandle) -> Result<()> {
         }
     } else {
         emit_done(app, "piper", "already present");
+    }
+
+    if !crate::setup::status::ort_lib_ready_in(&crate::binaries_dir()) {
+        download_ort(&client, app)
+            .await
+            .context("failed to download ONNX Runtime library")?;
+    } else {
+        emit_done(app, "onnxruntime", "already present");
     }
 
     Ok(())
@@ -212,6 +217,40 @@ async fn download_piper(client: &Client, app: &tauri::AppHandle) -> Result<()> {
     Ok(())
 }
 
+// ── ONNX Runtime (Host STT) ───────────────────────────────────────────────────
+
+async fn download_ort(client: &Client, app: &tauri::AppHandle) -> Result<()> {
+    let ort_dir = crate::binaries_dir().join(crate::constants::ORT_LIB_REL_DIR);
+    std::fs::create_dir_all(&ort_dir)?;
+
+    let (repo, pat) = catalog_github("onnxruntime").context(
+        "Platform-module catalog missing onnxruntime GithubRelease source",
+    )?;
+
+    let release = github_latest(client, repo).await?;
+    let tag = release["tag_name"].as_str().unwrap_or("unknown").to_string();
+
+    let url = find_asset(&release, pat)
+        .with_context(|| format!("no onnxruntime asset matching '{pat}' in release {tag}"))?;
+
+    let label = if url.ends_with(".zip") {
+        "onnxruntime.zip"
+    } else {
+        "onnxruntime.tgz"
+    };
+    let data = fetch_with_progress(client, app, label, &url).await?;
+
+    if url.ends_with(".zip") {
+        extract_zip_dlls(&data, &ort_dir).context("extracting ONNX Runtime DLLs")?;
+    } else {
+        extract_targz_shared_libs(&data, &ort_dir)
+            .context("extracting ONNX Runtime shared libs")?;
+    }
+
+    emit_done(app, "onnxruntime", &format!("installed ({tag})"));
+    Ok(())
+}
+
 // ── GitHub API ────────────────────────────────────────────────────────────────
 
 async fn github_latest(client: &Client, repo: &str) -> Result<serde_json::Value> {
@@ -225,14 +264,24 @@ async fn github_latest(client: &Client, repo: &str) -> Result<serde_json::Value>
 
 fn find_asset(release: &serde_json::Value, pattern: &str) -> Option<String> {
     let assets = release["assets"].as_array()?;
-    assets.iter().find_map(|a| {
+    // Prefer non-GPU assets when the pattern matches both (e.g. onnxruntime-linux-x64-).
+    let mut fallback = None;
+    for a in assets {
         let name = a["name"].as_str()?;
-        if name.contains(pattern) {
-            a["browser_download_url"].as_str().map(str::to_owned)
-        } else {
-            None
+        if !name.contains(pattern) {
+            continue;
         }
-    })
+        let url = a["browser_download_url"].as_str()?.to_owned();
+        let lower = name.to_lowercase();
+        if lower.contains("gpu") || lower.contains("cuda") {
+            if fallback.is_none() {
+                fallback = Some(url);
+            }
+            continue;
+        }
+        return Some(url);
+    }
+    fallback
 }
 
 // ── HTTP fetch with progress events ──────────────────────────────────────────

@@ -30,6 +30,8 @@ pub type SharedVoiceStop = Arc<std::sync::Mutex<Option<Arc<std::sync::atomic::At
 pub type SharedProcessPids = Arc<std::sync::Mutex<Vec<u32>>>;
 /// Live microphone energy (RMS as f32 bits) — updated by the capture thread, read by UI.
 pub type SharedAudioEnergy = Arc<std::sync::atomic::AtomicU32>;
+/// In-process Host STT engine. `None` = soft-fail / not ready (Core agent still up).
+pub type SharedSttEngine = Arc<std::sync::Mutex<Option<Arc<audio::SttClient>>>>;
 
 pub fn run() {
     // Before any cpal/ALSA device probe (sidecars, TTS, mic).
@@ -60,6 +62,7 @@ pub fn run() {
             let voice_stop: SharedVoiceStop = Arc::new(std::sync::Mutex::new(None));
             let process_pids: SharedProcessPids = Arc::new(std::sync::Mutex::new(Vec::new()));
             let audio_energy: SharedAudioEnergy = Arc::new(std::sync::atomic::AtomicU32::new(0));
+            let stt_engine: SharedSttEngine = Arc::new(std::sync::Mutex::new(None));
 
             app.manage(config.clone());
             app.manage(orchestrator.clone());
@@ -69,6 +72,39 @@ pub fn run() {
             app.manage(voice_stop.clone());
             app.manage(process_pids.clone());
             app.manage(audio_energy.clone());
+            app.manage(stt_engine.clone());
+
+            // Host STT: soft-fail load — Core agent stays up; rich diagnostics on failure.
+            {
+                let log = event_log.clone();
+                let handle = app_handle.clone();
+                let engine_slot = stt_engine.clone();
+                match try_load_stt_engine() {
+                    Ok(client) => {
+                        *engine_slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(client);
+                        monitor::push_event(
+                            &log,
+                            "[STT]",
+                            "Host STT path ready (in-process ort, CPU)",
+                        );
+                    }
+                    Err(e) => {
+                        let msg = format!(
+                            "Host STT soft-fail — Core agent continues; transcription off. \
+                             Open Setup Wizard / Setup repair.\n{e:#}"
+                        );
+                        monitor::push_event(&log, "[STT]", &msg);
+                        let _ = handle.emit(
+                            "debug_event",
+                            monitor::DebugEvent {
+                                timestamp: chrono::Utc::now(),
+                                component: "[STT]".into(),
+                                message: msg,
+                            },
+                        );
+                    }
+                }
+            }
 
             spawn_sidecars(config.clone(), event_log.clone(), chat_child.clone(), process_pids.clone());
 
@@ -219,12 +255,12 @@ fn kill_all_sidecars(app_handle: &tauri::AppHandle) {
     }
 
     // Safety net: free known sidecar ports even if PID tracking missed a fork/exec.
-    // Reads config when available; falls back to defaults.
-    let (chat_port, embed_port, stt_port) = app_handle
+    // Reads config when available; falls back to defaults. (STT is in-process — no port.)
+    let (chat_port, embed_port) = app_handle
         .try_state::<SharedConfig>()
-        .and_then(|cfg| cfg.inner().try_read().ok().map(|c| (c.llama_port, c.embed_port, c.stt_port)))
-        .unwrap_or((18080, 18081, 5092));
-    for port in [chat_port, embed_port, stt_port] {
+        .and_then(|cfg| cfg.inner().try_read().ok().map(|c| (c.llama_port, c.embed_port)))
+        .unwrap_or((18080, 18081));
+    for port in [chat_port, embed_port] {
         kill_listeners_on_port(port);
     }
 }
@@ -519,7 +555,6 @@ fn spawn_sidecars(config: SharedConfig, event_log: SharedEventLog, chat_child: S
         let embed_path     = cfg.embed_model_path().to_string_lossy().into_owned();
         let cfg_models_dir = cfg.models_dir.clone();
         let embed_port     = cfg.embed_port;
-        let _stt_port      = cfg.stt_port; // port is hardcoded in parakeet-server binary
         let llama_port     = cfg.llama_port;
         drop(cfg);
 
@@ -540,20 +575,7 @@ fn spawn_sidecars(config: SharedConfig, event_log: SharedEventLog, chat_child: S
                  "--alias".into(), "nomic-embed-text".into()],
             event_log.clone(), pids.clone());
 
-        // Parakeet TDT STT — Windows: frozen PyInstaller binary; Linux: managed
-        // launcher under binaries/parakeet/ (written by scripts/run-parakeet-linux.sh).
-        // Skip spawn if something already answers health on the STT port.
-        let stt_port = _stt_port;
-        let evt = event_log.clone();
-        let pids_stt = pids.clone();
-        tauri::async_runtime::spawn(async move {
-            if stt_already_up(stt_port).await {
-                monitor::push_event(&evt, "[ADAPTER]",
-                    format!("Parakeet STT already up on :{stt_port} — not spawning"));
-                return;
-            }
-            spawn_direct("parakeet-server", "Parakeet STT", vec![], evt, pids_stt);
-        });
+        // Host STT is in-process ort — no Parakeet HTTP sidecar.
 
         // TTS uses Piper as a subprocess per request — no persistent server needed.
         let tts_model = cfg_models_dir.join("tts").join(constants::TTS_MODEL_FILE);
@@ -565,24 +587,11 @@ fn spawn_sidecars(config: SharedConfig, event_log: SharedEventLog, chat_child: S
     });
 }
 
-/// True if an STT server already responds on `port` (e.g. manually started).
-async fn stt_already_up(port: u16) -> bool {
-    let client = match reqwest::Client::builder()
-        .timeout(std::time::Duration::from_millis(500))
-        .build()
-    {
-        Ok(c) => c,
-        Err(_) => return false,
-    };
-    for path in ["/healthz", "/health"] {
-        let url = format!("http://{}:{port}{path}", SIDECAR_HOST);
-        if let Ok(r) = client.get(&url).send().await {
-            if r.status().is_success() {
-                return true;
-            }
-        }
-    }
-    false
+fn try_load_stt_engine() -> anyhow::Result<Arc<audio::SttClient>> {
+    let model_dir = AppConfig::stt_model_dir();
+    let ort_dir = AppConfig::ort_lib_dir();
+    let client = audio::SttClient::new(&model_dir, &ort_dir)?;
+    Ok(Arc::new(client))
 }
 
 fn spawn_direct(

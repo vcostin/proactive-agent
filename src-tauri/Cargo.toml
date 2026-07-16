@@ -43,6 +43,10 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 flate2 = "1"
 tar = "0.4"
 libc = "0.2"
+# Host STT: in-process Parakeet TDT via ort (load-dynamic = app-managed ORT lib).
+parakeet-rs = { version = "0.3", default-features = false, features = ["cpu", "load-dynamic"] }
+ort = { version = "2.0.0-rc.12", default-features = false, features = ["std", "ndarray", "api-24", "load-dynamic"] }
+ndarray = "0.17"
 
 [package.metadata.bundle]
 identifier = "com.proactive.agent"

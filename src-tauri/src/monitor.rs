@@ -284,15 +284,14 @@ pub async fn run_monitor_loop(
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
     loop {
         interval.tick().await;
-        let (llama_port, embed_port, stt_port) = {
+        let (llama_port, embed_port) = {
             let cfg = config.read().await;
-            (cfg.llama_port, cfg.embed_port, cfg.stt_port)
+            (cfg.llama_port, cfg.embed_port)
         };
 
         let sidecars = [
-            ("llama",    llama_port),
-            ("embed",    embed_port),
-            ("parakeet", stt_port),
+            ("llama", llama_port),
+            ("embed", embed_port),
         ];
 
         for (name, port) in sidecars {

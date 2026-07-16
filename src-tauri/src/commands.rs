@@ -10,7 +10,10 @@ use tauri_plugin_dialog::DialogExt;
 use crate::monitor::{AudioState, MemoryStats, ModelInfo, SystemStatus};
 use crate::orchestrator::context::AssembledContext;
 use crate::monitor::SharedEventLog;
-use crate::{SharedAudioEnergy, SharedChatChild, SharedConfig, SharedOrchestrator, SharedProcessPids, SharedScheduler, SharedVoiceStop};
+use crate::{
+    SharedAudioEnergy, SharedChatChild, SharedConfig, SharedOrchestrator, SharedProcessPids,
+    SharedScheduler, SharedSttEngine, SharedVoiceStop,
+};
 
 type CmdResult<T> = Result<T, String>;
 
@@ -158,7 +161,10 @@ pub async fn download_required_models(
             _ => continue,
         };
         // Wizard model step: embed + STT files (not TTS voice — out of Host bar)
-        if !matches!(def.id, "embed-model" | "stt-model" | "stt-tokens") {
+        if !matches!(
+            def.id,
+            "embed-model" | "stt-encoder" | "stt-decoder" | "stt-vocab"
+        ) {
             continue;
         }
 
@@ -257,32 +263,29 @@ pub async fn speak_text(
 /// Transcripts arrive as `voice_transcript` Tauri events.
 #[tauri::command]
 pub async fn start_voice_input(
-    config: State<'_, SharedConfig>,
     voice_stop: State<'_, SharedVoiceStop>,
     audio_energy: State<'_, SharedAudioEnergy>,
+    stt_engine: State<'_, SharedSttEngine>,
     app_handle: tauri::AppHandle,
 ) -> CmdResult<()> {
     use std::sync::atomic::{AtomicBool, Ordering};
 
-    let stt_port = config.read().await.stt_port;
+    let stt = stt_engine
+        .inner()
+        .lock()
+        .map_err(|_| "STT engine lock poisoned".to_string())?
+        .clone();
 
-    // Prefight: mic alone is useless without STT. Allow a warm-up window —
-    // Parakeet loads its ONNX model for several seconds after spawn.
-    if !stt_reachable(stt_port).await {
+    if stt.is_none() {
+        // Soft-fail: keep mic/waveform usable; transcription stays off in the STT loop.
         crate::monitor::emit_debug_event(
             &app_handle,
             &crate::monitor::new_event_log(),
-            "[AUDIO]",
-            format!("STT not ready on :{stt_port} — waiting up to 25s for sidecar…"),
-        ).await;
-        if !wait_for_stt(stt_port, std::time::Duration::from_secs(25)).await {
-            return Err(format!(
-                "Speech-to-text is not running on port {stt_port} (Parakeet). \
-                 Waveform works, but nothing will be transcribed. \
-                 Open Setup repair to restore Host STT app-managed artifacts, \
-                 or on Linux run: deno task parakeet:linux — or type instead."
-            ));
-        }
+            "[STT]",
+            "Host STT engine unavailable — starting mic with transcription off. \
+             Open Setup Wizard / Setup repair to restore model + vocab + ONNX Runtime.",
+        )
+        .await;
     }
 
     // Stop any existing recording
@@ -340,47 +343,15 @@ pub async fn start_voice_input(
         .recv_timeout(std::time::Duration::from_secs(3))
         .unwrap_or((16000, 1));
 
-    tauri::async_runtime::spawn(crate::audio::run_stt_loop(rx, stt_port, sample_rate, channels, app_handle));
+    tauri::async_runtime::spawn(crate::audio::run_stt_loop(
+        rx,
+        stt,
+        sample_rate,
+        channels,
+        app_handle,
+    ));
 
     Ok(())
-}
-
-/// Quick HTTP health probe for the Parakeet STT sidecar.
-async fn stt_reachable(port: u16) -> bool {
-    let client = match reqwest::Client::builder()
-        .timeout(std::time::Duration::from_millis(800))
-        .build()
-    {
-        Ok(c) => c,
-        Err(_) => return false,
-    };
-    // Upstream health endpoints vary: /health, /healthz
-    for path in ["/healthz", "/health", "/v1/models"] {
-        let url = format!("http://{}:{}{path}", crate::SIDECAR_HOST, port);
-        if let Ok(resp) = client.get(&url).send().await {
-            if resp.status().is_success() {
-                return true;
-            }
-        }
-    }
-    // TCP connect as last resort — server up but odd routing
-    let alt = format!(
-        "http://{}:{}/v1/audio/transcriptions",
-        crate::SIDECAR_HOST,
-        port
-    );
-    matches!(client.get(&alt).send().await, Ok(r) if !r.status().is_server_error() || r.status().as_u16() == 405 || r.status().as_u16() == 422 || r.status().as_u16() == 400)
-}
-
-async fn wait_for_stt(port: u16, budget: std::time::Duration) -> bool {
-    let start = std::time::Instant::now();
-    while start.elapsed() < budget {
-        if stt_reachable(port).await {
-            return true;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-    }
-    false
 }
 
 /// Current mic energy level (0.0–1.0) for the waveform visualiser.

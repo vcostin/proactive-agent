@@ -212,13 +212,12 @@ function ToolsStep({ binaries, sttReady, progress, downloading, error, onDownloa
       optional: true,
     },
     {
-      key: 'parakeet-server',
-      label: 'Parakeet STT',
-      desc: binaries.parakeet_note,
-      size: 'launcher',
-      ready: binaries.parakeet_ready,
+      key: 'onnxruntime',
+      label: 'ONNX Runtime',
+      desc: binaries.ort_note,
+      size: '~6 MB',
+      ready: binaries.ort_ready,
       optional: true,
-      manual: true,
     },
   ];
 
@@ -234,11 +233,11 @@ function ToolsStep({ binaries, sttReady, progress, downloading, error, onDownloa
         border: `1px solid ${sttReady ? 'var(--success)' : 'var(--border)'}`,
         borderRadius: 'var(--radius)', color: 'var(--text-muted)',
       }}>
-        Host STT path: {sttReady ? 'ready (model + launcher)' : 'not ready — repair via models step / Setup repair'}
+        Host STT path: {sttReady ? 'ready (model + vocab + ONNX Runtime)' : 'not ready — repair via models step / Setup repair'}
       </div>
 
       {tools.map(t => {
-        const p = progress[t.key] ?? progress[`${t.key}.zip`];
+        const p = progress[t.key] ?? progress[`${t.key}.zip`] ?? progress['onnxruntime.tgz'];
         const pct = p && p.total > 0 ? Math.round((p.downloaded / p.total) * 100) : 0;
         const borderColor = t.ready ? 'var(--success)' : 'var(--border)';
 
@@ -247,14 +246,13 @@ function ToolsStep({ binaries, sttReady, progress, downloading, error, onDownloa
             padding: '10px 12px', background: 'var(--bg)',
             border: `1px solid ${borderColor}`,
             borderRadius: 'var(--radius)',
-            opacity: t.manual && !t.ready ? 0.6 : 1,
           }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
               <span style={{ fontWeight: 500, fontSize: 12 }}>
                 {t.label}{t.optional ? ' (optional)' : ''}
               </span>
               <span style={{ fontSize: 11, color: t.ready ? 'var(--success)' : 'var(--text-muted)' }}>
-                {t.ready ? '✓ ready' : t.manual ? 'manual / repair' : t.size}
+                {t.ready ? '✓ ready' : t.size}
               </span>
             </div>
             <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: p && !p.done ? 6 : 0 }}>
@@ -316,11 +314,25 @@ function ModelsStep({ status, sttReady, deps, onDepsChange, progress, downloadin
       ready: status.embed_model_ready,
     },
     {
-      filename: 'parakeet-tdt-0.6b-v3.onnx',
-      label: 'Parakeet TDT 0.6B',
-      desc: 'Speech-to-text ONNX model (Host STT path)',
-      size: '~600 MB',
+      filename: 'encoder-model.int8.onnx',
+      label: 'Parakeet TDT encoder',
+      desc: 'Speech-to-text encoder (Host STT path)',
+      size: '~620 MB',
       ready: status.stt_model_ready,
+    },
+    {
+      filename: 'decoder_joint-model.int8.onnx',
+      label: 'Parakeet TDT decoder',
+      desc: 'Speech-to-text decoder-joint (Host STT path)',
+      size: '~18 MB',
+      ready: status.stt_model_ready,
+    },
+    {
+      filename: 'vocab.txt',
+      label: 'Parakeet vocabulary',
+      desc: 'STT token vocabulary',
+      size: '~90 KB',
+      ready: status.stt_vocab_ready,
     },
   ];
 
@@ -340,7 +352,7 @@ function ModelsStep({ status, sttReady, deps, onDepsChange, progress, downloadin
         border: `1px solid ${sttReady ? 'var(--success)' : 'var(--border)'}`,
         borderRadius: 'var(--radius)', color: 'var(--text-muted)',
       }}>
-        Host STT: {sttReady ? 'ready' : 'incomplete — download models and ensure the Parakeet launcher is present'}
+        Host STT: {sttReady ? 'ready' : 'incomplete — download STT models and ONNX Runtime (tools step)'}
       </div>
 
       {models.map(m => {

@@ -1,7 +1,7 @@
 //! Guest OS (Windows) Platform module — compile-safe catalog stub.
 //!
 //! Definitions are present so shared core can resolve ids; fetch patterns match
-//! existing binary_store knowledge. Full parity lands when Windows becomes Host.
+//! existing binary_store knowledge. Full STT parity lands when Windows becomes Host.
 
 use super::artifact::{
     ArtifactDef, ArtifactKind, ArtifactRoot, ArtifactSource, VerifyRule,
@@ -72,28 +72,59 @@ pub static ARTIFACTS: &[ArtifactDef] = &[
         required_for_stt: false,
     },
     ArtifactDef {
-        id: "stt-model",
+        id: "stt-encoder",
         kind: ArtifactKind::Model,
         root: ArtifactRoot::Binaries,
         relative_dir: "parakeet/models",
-        filename: constants::STT_MODEL_FILE,
+        filename: constants::STT_ENCODER_FILE,
         sidecar_name: false,
         source: ArtifactSource::Url {
-            url: constants::STT_MODEL_URL,
+            url: constants::STT_ENCODER_URL,
         },
         verify: VerifyRule::Exists,
         required_for_core: false,
         required_for_stt: true,
     },
     ArtifactDef {
-        id: "parakeet-server",
-        kind: ArtifactKind::Sidecar,
+        id: "stt-decoder",
+        kind: ArtifactKind::Model,
         root: ArtifactRoot::Binaries,
-        relative_dir: "",
-        filename: "parakeet-server",
-        sidecar_name: true,
-        source: ArtifactSource::Manual,
-        verify: VerifyRule::SidecarUsable,
+        relative_dir: "parakeet/models",
+        filename: constants::STT_DECODER_FILE,
+        sidecar_name: false,
+        source: ArtifactSource::Url {
+            url: constants::STT_DECODER_URL,
+        },
+        verify: VerifyRule::Exists,
+        required_for_core: false,
+        required_for_stt: true,
+    },
+    ArtifactDef {
+        id: "stt-vocab",
+        kind: ArtifactKind::Data,
+        root: ArtifactRoot::Binaries,
+        relative_dir: "parakeet/models",
+        filename: constants::STT_VOCAB_FILE,
+        sidecar_name: false,
+        source: ArtifactSource::Url {
+            url: constants::STT_VOCAB_URL,
+        },
+        verify: VerifyRule::Exists,
+        required_for_core: false,
+        required_for_stt: true,
+    },
+    ArtifactDef {
+        id: "onnxruntime",
+        kind: ArtifactKind::Data,
+        root: ArtifactRoot::Binaries,
+        relative_dir: "ort",
+        filename: "onnxruntime.dll",
+        sidecar_name: false,
+        source: ArtifactSource::GithubRelease {
+            repo: "microsoft/onnxruntime",
+            pattern: "onnxruntime-win-x64-",
+        },
+        verify: VerifyRule::SharedLibPresent,
         required_for_core: false,
         required_for_stt: true,
     },
