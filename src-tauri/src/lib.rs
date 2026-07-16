@@ -6,6 +6,8 @@ mod config;
 mod memory;
 mod monitor;
 mod orchestrator;
+pub mod platform;
+pub mod setup;
 
 /// Re-export for ergonomic use across all sibling modules.
 pub use constants::SIDECAR_HOST;
@@ -13,7 +15,7 @@ pub use constants::SIDECAR_HOST;
 use config::AppConfig;
 use monitor::{new_event_log, run_monitor_loop, SharedEventLog};
 use orchestrator::{scheduler::ProactivityScheduler, Orchestrator};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tauri::{Emitter, Manager};
 use tokio::sync::{Mutex, RwLock};
@@ -138,6 +140,8 @@ pub fn run() {
             commands::get_setup_status,
             commands::check_binaries_ready,
             commands::download_required_binaries,
+            commands::verify_platform_artifacts,
+            commands::get_artifact_catalog,
             commands::check_system_deps,
             commands::install_vcredist,
             #[cfg(debug_assertions)] commands::open_llama_diagnostic,
@@ -371,7 +375,7 @@ pub fn find_sidecar(name: &str) -> Option<PathBuf> {
 
 /// Accept real binaries and small shell launchers (Linux Parakeet wrapper is ~700 B).
 /// The old `len > 1024` gate rejected the managed Linux launcher as "not found".
-fn sidecar_file_usable(p: &PathBuf) -> bool {
+pub fn sidecar_file_usable(p: &Path) -> bool {
     let Ok(meta) = p.metadata() else { return false };
     if !meta.is_file() { return false; }
     let len = meta.len();
@@ -451,7 +455,7 @@ pub fn start_chat_server(
             Some(b) => b,
             None => {
                 monitor::push_event(&event_log, "[ADAPTER]",
-                    "llama (chat): binary not found — run: deno task setup");
+                    "llama (chat): binary not found — open Setup repair");
                 return;
             }
         };
@@ -553,7 +557,7 @@ fn spawn_sidecars(config: SharedConfig, event_log: SharedEventLog, chat_child: S
         if tts_model.exists() {
             monitor::push_event(&event_log, "[ADAPTER]", "TTS (Piper) ready — subprocess mode");
         } else {
-            monitor::push_event(&event_log, "[ADAPTER]", "TTS unavailable — run: deno task setup");
+            monitor::push_event(&event_log, "[ADAPTER]", "TTS unavailable — open Setup repair");
         }
     });
 }
@@ -589,7 +593,7 @@ fn spawn_direct(
         Some(b) => b,
         None => {
             monitor::push_event(&event_log, "[ADAPTER]",
-                format!("{display_name}: not found — run: deno task setup"));
+                format!("{display_name}: not found — open Setup repair"));
             return;
         }
     };

@@ -7,24 +7,39 @@ import { SystemRequirements } from './SystemRequirements';
 
 interface Props {
   status: SetupStatus;
+  /** True when reopened via Setup repair (memory/config intact). */
+  repair?: boolean;
   onComplete: (modelPath: string) => void;
+  /** Close repair and return to main UI without changing the chat model. */
+  onClose?: () => void;
 }
 
 type Step = 'tools' | 'models' | 'chat';
 
 function initialStep(status: SetupStatus): Step {
-  if (!status.binaries.llama_ready || !status.binaries.piper_ready) return 'tools';
+  // Core agent needs llama; piper is optional (TTS out of Host completion bar).
+  if (!status.binaries.llama_ready) return 'tools';
   if (!status.embed_model_ready || !status.stt_model_ready) return 'models';
   return 'chat';
 }
 
-export function SetupWizard({ status, onComplete }: Props) {
+export function SetupWizard({ status, repair = false, onComplete, onClose }: Props) {
   const [step, setStep]           = useState<Step>(initialStep(status));
   const [binaries, setBinaries]   = useState<BinariesStatus>(status.binaries);
   const [deps, setDeps]           = useState<SystemDeps | null>(null);
   const [downloading, setDownloading] = useState(false);
   const [progress, setProgress]   = useState<Record<string, DownloadProgress>>({});
   const [error, setError]         = useState<string | null>(null);
+  const [sttReady, setSttReady]   = useState(status.stt_ready);
+
+  useEffect(() => {
+    // Setup repair re-checks prerequisites and artifact readiness on open.
+    invoke<SetupStatus>('get_setup_status').then(s => {
+      setBinaries(s.binaries);
+      setSttReady(s.stt_ready);
+    });
+    invoke<SystemDeps>('check_system_deps').then(d => setDeps(d)).catch(() => {});
+  }, []);
 
   useEffect(() => {
     let unlisten: (() => void) | null = null;
@@ -41,7 +56,7 @@ export function SetupWizard({ status, onComplete }: Props) {
       await invoke('download_required_binaries');
       const fresh = await invoke<BinariesStatus>('check_binaries_ready');
       setBinaries(fresh);
-      if (fresh.llama_ready && fresh.piper_ready) setStep('models');
+      if (fresh.llama_ready) setStep('models');
     } catch (e) {
       setError(String(e));
     } finally {
@@ -54,6 +69,8 @@ export function SetupWizard({ status, onComplete }: Props) {
     setError(null);
     try {
       await invoke('download_required_models');
+      const fresh = await invoke<SetupStatus>('get_setup_status');
+      setSttReady(fresh.stt_ready);
       setStep('chat');
     } catch (e) {
       setError(String(e));
@@ -79,7 +96,8 @@ export function SetupWizard({ status, onComplete }: Props) {
     }
   };
 
-  const toolsDone = binaries.llama_ready && binaries.piper_ready;
+  // Core tools done when llama is present; piper remains optional in the list.
+  const toolsDone = binaries.llama_ready;
   const modelsDone = status.embed_model_ready && status.stt_model_ready;
 
   return (
@@ -92,13 +110,20 @@ export function SetupWizard({ status, onComplete }: Props) {
         border: '1px solid var(--border)', borderRadius: 10,
         overflow: 'hidden',
       }}>
-        {/* Header */}
         <div style={{ padding: '20px 24px 16px', borderBottom: '1px solid var(--border)' }}>
-          <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 4 }}>proactive-agent</div>
-          <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>first-run setup</div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+            <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 4 }}>proactive-agent</div>
+            {repair && onClose && (
+              <button onClick={onClose} style={{ fontSize: 11, padding: '2px 10px' }}>
+                back to app
+              </button>
+            )}
+          </div>
+          <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+            {repair ? 'Setup repair — re-check and restore app-managed artifacts' : 'Setup Wizard'}
+          </div>
         </div>
 
-        {/* Step indicator */}
         <div style={{
           display: 'flex', padding: '12px 24px',
           borderBottom: '1px solid var(--border)', gap: 8, alignItems: 'center',
@@ -110,11 +135,11 @@ export function SetupWizard({ status, onComplete }: Props) {
           <StepPill n={3} label="chat model" active={step === 'chat'} done={!!status.chat_model} />
         </div>
 
-        {/* Content */}
         <div style={{ padding: '20px 24px' }}>
           {step === 'tools' && (
             <ToolsStep
               binaries={binaries}
+              sttReady={sttReady}
               progress={progress}
               downloading={downloading}
               error={error}
@@ -125,6 +150,7 @@ export function SetupWizard({ status, onComplete }: Props) {
           {step === 'models' && (
             <ModelsStep
               status={status}
+              sttReady={sttReady}
               deps={deps}
               onDepsChange={setDeps}
               progress={progress}
@@ -135,7 +161,13 @@ export function SetupWizard({ status, onComplete }: Props) {
             />
           )}
           {step === 'chat' && (
-            <ChatModelStep error={error} onPick={handlePickModel} />
+            <ChatModelStep
+              error={error}
+              onPick={handlePickModel}
+              repair={repair}
+              hasModel={!!status.chat_model}
+              onClose={onClose}
+            />
           )}
         </div>
 
@@ -151,10 +183,11 @@ export function SetupWizard({ status, onComplete }: Props) {
   );
 }
 
-// ── Step 1: tools (llama-server + piper) ─────────────────────────────────────
+// ── Step 1: tools (llama-server required; piper optional) ────────────────────
 
-function ToolsStep({ binaries, progress, downloading, error, onDownload, onSkip }: {
+function ToolsStep({ binaries, sttReady, progress, downloading, error, onDownload, onSkip }: {
   binaries: BinariesStatus;
+  sttReady: boolean;
   progress: Record<string, DownloadProgress>;
   downloading: boolean;
   error: string | null;
@@ -165,41 +198,49 @@ function ToolsStep({ binaries, progress, downloading, error, onDownload, onSkip 
     {
       key: 'llama-server',
       label: 'llama-server',
-      desc: 'LLM inference engine — CPU build + Vulkan GPU DLLs',
+      desc: 'LLM inference engine — required for the Core agent',
       size: '~90 MB',
       ready: binaries.llama_ready,
+      optional: false,
     },
     {
       key: 'piper',
       label: 'Piper TTS',
-      desc: 'Text-to-speech — offline neural voice synthesis',
+      desc: 'Text-to-speech (optional — not required for Core agent / Host done bar)',
       size: '~5 MB',
       ready: binaries.piper_ready,
+      optional: true,
     },
     {
       key: 'parakeet-server',
       label: 'Parakeet STT',
       desc: binaries.parakeet_note,
-      size: '~48 MB',
+      size: 'launcher',
       ready: binaries.parakeet_ready,
+      optional: true,
       manual: true,
     },
   ];
 
-  const autoTools = tools.filter(t => !t.manual);
-  const allAutoReady = autoTools.every(t => t.ready);
-
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: 0 }}>
-        The inference engine and voice tools run locally on your machine.
-        They download once from GitHub releases.
+        App-managed sidecars run locally. llama-server is required for chat;
+        Piper TTS is optional. Host STT readiness is shown below.
       </p>
+
+      <div style={{
+        fontSize: 11, padding: '6px 10px',
+        border: `1px solid ${sttReady ? 'var(--success)' : 'var(--border)'}`,
+        borderRadius: 'var(--radius)', color: 'var(--text-muted)',
+      }}>
+        Host STT path: {sttReady ? 'ready (model + launcher)' : 'not ready — repair via models step / Setup repair'}
+      </div>
 
       {tools.map(t => {
         const p = progress[t.key] ?? progress[`${t.key}.zip`];
         const pct = p && p.total > 0 ? Math.round((p.downloaded / p.total) * 100) : 0;
-        const borderColor = t.ready ? 'var(--success)' : t.manual ? 'var(--border)' : 'var(--border)';
+        const borderColor = t.ready ? 'var(--success)' : 'var(--border)';
 
         return (
           <div key={t.key} style={{
@@ -209,9 +250,11 @@ function ToolsStep({ binaries, progress, downloading, error, onDownload, onSkip 
             opacity: t.manual && !t.ready ? 0.6 : 1,
           }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-              <span style={{ fontWeight: 500, fontSize: 12 }}>{t.label}</span>
+              <span style={{ fontWeight: 500, fontSize: 12 }}>
+                {t.label}{t.optional ? ' (optional)' : ''}
+              </span>
               <span style={{ fontSize: 11, color: t.ready ? 'var(--success)' : 'var(--text-muted)' }}>
-                {t.ready ? '✓ ready' : t.manual ? 'manual step' : t.size}
+                {t.ready ? '✓ ready' : t.manual ? 'manual / repair' : t.size}
               </span>
             </div>
             <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: p && !p.done ? 6 : 0 }}>
@@ -234,7 +277,7 @@ function ToolsStep({ binaries, progress, downloading, error, onDownload, onSkip 
       {error && <ErrorBox msg={error} />}
 
       <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-        {allAutoReady
+        {binaries.llama_ready
           ? <button className="primary" onClick={onSkip} style={{ padding: '6px 20px' }}>next →</button>
           : <>
               <button onClick={onSkip} style={{ padding: '6px 14px', fontSize: 11, color: 'var(--text-muted)' }}>
@@ -253,8 +296,9 @@ function ToolsStep({ binaries, progress, downloading, error, onDownload, onSkip 
 
 // ── Step 2: required models ───────────────────────────────────────────────────
 
-function ModelsStep({ status, deps, onDepsChange, progress, downloading, error, onDownload, onSkip }: {
+function ModelsStep({ status, sttReady, deps, onDepsChange, progress, downloading, error, onDownload, onSkip }: {
   status: SetupStatus;
+  sttReady: boolean;
   deps: SystemDeps | null;
   onDepsChange: (d: SystemDeps) => void;
   progress: Record<string, DownloadProgress>;
@@ -274,7 +318,7 @@ function ModelsStep({ status, deps, onDepsChange, progress, downloading, error, 
     {
       filename: 'parakeet-tdt-0.6b-v3.onnx',
       label: 'Parakeet TDT 0.6B',
-      desc: 'Speech-to-text ONNX model',
+      desc: 'Speech-to-text ONNX model (Host STT path)',
       size: '~600 MB',
       ready: status.stt_model_ready,
     },
@@ -287,9 +331,17 @@ function ModelsStep({ status, deps, onDepsChange, progress, downloading, error, 
       <SystemRequirements onChange={onDepsChange} />
 
       <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: 0 }}>
-        Two small models are required for vector memory and voice input.
-        They download once and live in your app data folder.
+        Embed + STT models are app-managed artifacts. Skip STT if you only need text chat;
+        Core agent still works. Missing STT is repairable via Setup repair.
       </p>
+
+      <div style={{
+        fontSize: 11, padding: '6px 10px',
+        border: `1px solid ${sttReady ? 'var(--success)' : 'var(--border)'}`,
+        borderRadius: 'var(--radius)', color: 'var(--text-muted)',
+      }}>
+        Host STT: {sttReady ? 'ready' : 'incomplete — download models and ensure the Parakeet launcher is present'}
+      </div>
 
       {models.map(m => {
         const p = progress[m.filename];
@@ -332,7 +384,7 @@ function ModelsStep({ status, deps, onDepsChange, progress, downloading, error, 
           border: '1px solid var(--error)',
           borderRadius: 'var(--radius)', color: 'var(--error)',
         }}>
-          ⚠ llama-server won't run until system requirements are met.
+          llama-server won't run until system prerequisites are met — see guidance above.
         </div>
       )}
 
@@ -341,11 +393,11 @@ function ModelsStep({ status, deps, onDepsChange, progress, downloading, error, 
           ? <button className="primary" onClick={onSkip} style={{ padding: '6px 20px' }}>next →</button>
           : <>
               <button onClick={onSkip} style={{ padding: '6px 14px', fontSize: 11, color: 'var(--text-muted)' }}>
-                skip (voice disabled)
+                skip (voice deferred)
               </button>
               <button className="primary" onClick={onDownload} disabled={downloading}
                 style={{ padding: '6px 20px' }}>
-                {downloading ? 'downloading…' : 'download (~874 MB)'}
+                {downloading ? 'downloading…' : 'download models'}
               </button>
             </>
         }
@@ -356,12 +408,18 @@ function ModelsStep({ status, deps, onDepsChange, progress, downloading, error, 
 
 // ── Step 3: chat model ────────────────────────────────────────────────────────
 
-function ChatModelStep({ error, onPick }: { error: string | null; onPick: () => void }) {
+function ChatModelStep({ error, onPick, repair, hasModel, onClose }: {
+  error: string | null;
+  onPick: () => void;
+  repair?: boolean;
+  hasModel?: boolean;
+  onClose?: () => void;
+}) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: 0 }}>
         Pick a <strong>.gguf</strong> chat model from anywhere on your disk.
-        For your hardware (16 GB VRAM) these are good fits:
+        Changing the model does not wipe memory or other artifacts.
       </p>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
@@ -387,7 +445,12 @@ function ChatModelStep({ error, onPick }: { error: string | null; onPick: () => 
 
       {error && <ErrorBox msg={error} />}
 
-      <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+      <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+        {repair && hasModel && onClose && (
+          <button onClick={onClose} style={{ padding: '8px 16px', fontSize: 12 }}>
+            keep current model
+          </button>
+        )}
         <button className="primary" onClick={onPick} style={{ padding: '8px 24px', fontSize: 13 }}>
           Browse for .gguf file…
         </button>

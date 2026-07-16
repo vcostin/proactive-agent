@@ -1,0 +1,119 @@
+{
+  "platform": "linux",
+  "artifacts": [
+    {
+      "id": "llama-server",
+      "kind": "sidecar",
+      "root": "binaries",
+      "relative_dir": "",
+      "filename": "llama-server",
+      "sidecar_name": true,
+      "source": {
+        "type": "github_release",
+        "repo": "ggml-org/llama.cpp",
+        "pattern": "bin-ubuntu-x64.tar.gz"
+      },
+      "required_for_core": true,
+      "required_for_stt": false
+    },
+    {
+      "id": "llama-vulkan-libs",
+      "kind": "data",
+      "root": "binaries",
+      "relative_dir": "llama",
+      "filename": "libggml-vulkan.so",
+      "sidecar_name": false,
+      "source": {
+        "type": "github_release",
+        "repo": "ggml-org/llama.cpp",
+        "pattern": "bin-ubuntu-vulkan-x64.tar.gz"
+      },
+      "required_for_core": false,
+      "required_for_stt": false
+    },
+    {
+      "id": "piper",
+      "kind": "sidecar",
+      "root": "binaries",
+      "relative_dir": "",
+      "filename": "piper",
+      "sidecar_name": true,
+      "source": {
+        "type": "github_release",
+        "repo": "rhasspy/piper",
+        "pattern": "piper_linux_x86_64.tar.gz"
+      },
+      "required_for_core": false,
+      "required_for_stt": false
+    },
+    {
+      "id": "tts-voice",
+      "kind": "model",
+      "root": "models",
+      "relative_dir": "tts",
+      "filename": "en_US-lessac-medium.onnx",
+      "sidecar_name": false,
+      "source": {
+        "type": "url",
+        "url": "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/lessac/medium/en_US-lessac-medium.onnx"
+      },
+      "required_for_core": false,
+      "required_for_stt": false
+    },
+    {
+      "id": "embed-model",
+      "kind": "model",
+      "root": "models",
+      "relative_dir": "",
+      "filename": "nomic-embed-text-v1.5.Q8_0.gguf",
+      "sidecar_name": false,
+      "source": {
+        "type": "url",
+        "url": "https://huggingface.co/nomic-ai/nomic-embed-text-v1.5-GGUF/resolve/main/nomic-embed-text-v1.5.Q8_0.gguf"
+      },
+      "required_for_core": false,
+      "required_for_stt": false
+    },
+    {
+      "id": "stt-model",
+      "kind": "model",
+      "root": "binaries",
+      "relative_dir": "parakeet/models",
+      "filename": "parakeet-tdt-0.6b-v3.onnx",
+      "sidecar_name": false,
+      "source": {
+        "type": "url",
+        "url": "https://huggingface.co/groxaxo/parakeet-tdt-0.6b-v3-fastapi-openai/resolve/main/parakeet-tdt-0.6b-v3.onnx"
+      },
+      "required_for_core": false,
+      "required_for_stt": true
+    },
+    {
+      "id": "stt-tokens",
+      "kind": "data",
+      "root": "binaries",
+      "relative_dir": "parakeet/models",
+      "filename": "parakeet-tdt-0.6b-v3-tokens.txt",
+      "sidecar_name": false,
+      "source": {
+        "type": "url",
+        "url": "https://huggingface.co/groxaxo/parakeet-tdt-0.6b-v3-fastapi-openai/resolve/main/parakeet-tdt-0.6b-v3-tokens.txt"
+      },
+      "required_for_core": false,
+      "required_for_stt": true
+    },
+    {
+      "id": "parakeet-server",
+      "kind": "sidecar",
+      "root": "binaries",
+      "relative_dir": "",
+      "filename": "parakeet-server",
+      "sidecar_name": true,
+      "source": {
+        "type": "manual"
+      },
+      "required_for_core": false,
+      "required_for_stt": true
+    }
+  ]
+}

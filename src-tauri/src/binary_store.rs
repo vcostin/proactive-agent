@@ -14,57 +14,56 @@ use std::path::Path;
 use tauri::Emitter;
 
 use crate::commands::DownloadProgress;
+use crate::platform::ArtifactSource;
 
-// ── Platform constants ────────────────────────────────────────────────────────
+/// Resolve GitHub release (repo, pattern) for an artifact id from the Platform module.
+fn catalog_github(id: &str) -> Option<(&'static str, &'static str)> {
+    crate::platform::current_module()
+        .artifacts()
+        .iter()
+        .find(|a| a.id == id)
+        .and_then(|a| match &a.source {
+            ArtifactSource::GithubRelease { repo, pattern } => Some((*repo, *pattern)),
+            _ => None,
+        })
+}
+
+// ── Platform extract mechanics (not artifact URL/name SSOT — see `platform`) ─
 
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
 mod platform {
-    pub const TRIPLE:           &str = "x86_64-pc-windows-msvc";
-    pub const LLAMA_CPU_PAT:    &str = "bin-win-cpu-x64.zip";
-    pub const LLAMA_GPU_PAT:    Option<&str> = Some("bin-win-vulkan-x64.zip");
-    pub const PIPER_PAT:        &str = "piper_windows_amd64.zip";
-    pub const LLAMA_EXE:        &str = "llama-server.exe";
-    pub const PIPER_EXE:        &str = "piper.exe";
-    pub const PIPER_IS_TARGZ:   bool = false;
-    pub const LLAMA_IS_TARGZ:   bool = false;
+    pub const TRIPLE:         &str = "x86_64-pc-windows-msvc";
+    pub const LLAMA_EXE:      &str = "llama-server.exe";
+    pub const PIPER_EXE:      &str = "piper.exe";
+    pub const PIPER_IS_TARGZ: bool = false;
+    pub const LLAMA_IS_TARGZ: bool = false;
 }
 
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 mod platform {
-    pub const TRIPLE:           &str = "aarch64-apple-darwin";
-    // Prefer .tar.gz; find_asset matches substring so older .zip still works.
-    pub const LLAMA_CPU_PAT:    &str = "bin-macos-arm64";
-    pub const LLAMA_GPU_PAT:    Option<&str> = None; // Metal built-in to llama
-    pub const PIPER_PAT:        &str = "piper_macos_aarch64.tar.gz";
-    pub const LLAMA_EXE:        &str = "llama-server";
-    pub const PIPER_EXE:        &str = "piper";
-    pub const PIPER_IS_TARGZ:   bool = true;
-    pub const LLAMA_IS_TARGZ:   bool = true;
+    pub const TRIPLE:         &str = "aarch64-apple-darwin";
+    pub const LLAMA_EXE:      &str = "llama-server";
+    pub const PIPER_EXE:      &str = "piper";
+    pub const PIPER_IS_TARGZ: bool = true;
+    pub const LLAMA_IS_TARGZ: bool = true;
 }
 
 #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
 mod platform {
-    pub const TRIPLE:           &str = "x86_64-apple-darwin";
-    pub const LLAMA_CPU_PAT:    &str = "bin-macos-x64";
-    pub const LLAMA_GPU_PAT:    Option<&str> = None;
-    pub const PIPER_PAT:        &str = "piper_macos_x86_64.tar.gz";
-    pub const LLAMA_EXE:        &str = "llama-server";
-    pub const PIPER_EXE:        &str = "piper";
-    pub const PIPER_IS_TARGZ:   bool = true;
-    pub const LLAMA_IS_TARGZ:   bool = true;
+    pub const TRIPLE:         &str = "x86_64-apple-darwin";
+    pub const LLAMA_EXE:      &str = "llama-server";
+    pub const PIPER_EXE:      &str = "piper";
+    pub const PIPER_IS_TARGZ: bool = true;
+    pub const LLAMA_IS_TARGZ: bool = true;
 }
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 mod platform {
-    pub const TRIPLE:           &str = "x86_64-unknown-linux-gnu";
-    // Current ggml-org releases ship Ubuntu archives as .tar.gz (not .zip).
-    pub const LLAMA_CPU_PAT:    &str = "bin-ubuntu-x64.tar.gz";
-    pub const LLAMA_GPU_PAT:    Option<&str> = Some("bin-ubuntu-vulkan-x64.tar.gz");
-    pub const PIPER_PAT:        &str = "piper_linux_x86_64.tar.gz";
-    pub const LLAMA_EXE:        &str = "llama-server";
-    pub const PIPER_EXE:        &str = "piper";
-    pub const PIPER_IS_TARGZ:   bool = true;
-    pub const LLAMA_IS_TARGZ:   bool = true;
+    pub const TRIPLE:         &str = "x86_64-unknown-linux-gnu";
+    pub const LLAMA_EXE:      &str = "llama-server";
+    pub const PIPER_EXE:      &str = "piper";
+    pub const PIPER_IS_TARGZ: bool = true;
+    pub const LLAMA_IS_TARGZ: bool = true;
 }
 
 // ── Public status ─────────────────────────────────────────────────────────────
@@ -80,24 +79,16 @@ pub struct BinariesStatus {
 }
 
 pub fn check_binaries() -> BinariesStatus {
-    BinariesStatus {
-        llama_ready:    crate::find_sidecar("llama-server").is_some(),
-        piper_ready:    crate::find_sidecar("piper").is_some(),
-        parakeet_ready: crate::find_sidecar("parakeet-server").is_some(),
-        parakeet_note: {
-            #[cfg(target_os = "linux")]
-            { "Linux: managed by deno task setup (auto-starts with the app).".into() }
-            #[cfg(not(target_os = "linux"))]
-            { "Speech-to-text requires a manual build step. See ROADMAP for options.".into() }
-        },
-    }
+    // Delegate to the setup seam so wizard and status share one readiness answer.
+    crate::setup::status::check_binaries_in(&crate::binaries_dir())
 }
 
 // ── Download entry point ──────────────────────────────────────────────────────
 
-/// Download llama-server and piper for the current OS/arch.
+/// Download llama-server (required for Core agent) and piper (optional TTS).
 /// Emits `download_progress` events throughout.
-/// Parakeet is intentionally skipped.
+/// Piper failure does not fail the overall download — TTS is out of the Host completion bar.
+/// Parakeet is intentionally skipped (Manual catalog source).
 pub async fn download_all(app: &tauri::AppHandle) -> Result<()> {
     let client = Client::builder()
         .user_agent("proactive-agent/1.0")
@@ -111,8 +102,10 @@ pub async fn download_all(app: &tauri::AppHandle) -> Result<()> {
     }
 
     if crate::find_sidecar("piper").is_none() {
-        download_piper(&client, app).await
-            .context("failed to download piper")?;
+        if let Err(e) = download_piper(&client, app).await {
+            // Optional — do not block Core agent setup on TTS fetch failure.
+            emit_done(app, "piper", &format!("skipped ({e})"));
+        }
     } else {
         emit_done(app, "piper", "already present");
     }
@@ -126,15 +119,23 @@ async fn download_llama(client: &Client, app: &tauri::AppHandle) -> Result<()> {
     let llama_dir = crate::binaries_dir().join("llama");
     std::fs::create_dir_all(&llama_dir)?;
 
+    let (repo, cpu_pat) = catalog_github("llama-server").context(
+        "Platform-module catalog missing llama-server GithubRelease source",
+    )?;
+    let gpu_pat = catalog_github("llama-vulkan-libs").map(|(_, p)| p);
+
     // Prefer ggml-org; ggerganov still redirects but org moved.
-    let release = match github_latest(client, "ggml-org/llama.cpp").await {
+    let release = match github_latest(client, repo).await {
         Ok(r) => r,
-        Err(_) => github_latest(client, "ggerganov/llama.cpp").await?,
+        Err(_) if repo != "ggerganov/llama.cpp" => {
+            github_latest(client, "ggerganov/llama.cpp").await?
+        }
+        Err(e) => return Err(e),
     };
     let tag = release["tag_name"].as_str().unwrap_or("unknown").to_string();
 
     // Step 1: GPU backend libs (Windows DLLs / Linux .so from Vulkan archive)
-    if let Some(gpu_pat) = platform::LLAMA_GPU_PAT {
+    if let Some(gpu_pat) = gpu_pat {
         if let Some(url) = find_asset(&release, gpu_pat) {
             let label = if platform::LLAMA_IS_TARGZ { "llama-vulkan.tar.gz" } else { "llama-vulkan.zip" };
             let data = fetch_with_progress(client, app, label, &url).await?;
@@ -149,8 +150,8 @@ async fn download_llama(client: &Client, app: &tauri::AppHandle) -> Result<()> {
     }
 
     // Step 2: CPU server binary (full HTTP API on Windows; primary binary everywhere)
-    let cpu_url = find_asset(&release, platform::LLAMA_CPU_PAT)
-        .with_context(|| format!("no llama.cpp CPU asset matching '{}' in release {tag}", platform::LLAMA_CPU_PAT))?;
+    let cpu_url = find_asset(&release, cpu_pat)
+        .with_context(|| format!("no llama.cpp CPU asset matching '{cpu_pat}' in release {tag}"))?;
 
     let label = if platform::LLAMA_IS_TARGZ { "llama-cpu.tar.gz" } else { "llama-cpu.zip" };
     let data = fetch_with_progress(client, app, label, &cpu_url).await?;
@@ -179,11 +180,15 @@ async fn download_piper(client: &Client, app: &tauri::AppHandle) -> Result<()> {
     let piper_dir = crate::binaries_dir().join("piper");
     std::fs::create_dir_all(&piper_dir)?;
 
-    let release = github_latest(client, "rhasspy/piper").await?;
+    let (repo, pat) = catalog_github("piper").context(
+        "Platform-module catalog missing piper GithubRelease source",
+    )?;
+
+    let release = github_latest(client, repo).await?;
     let tag = release["tag_name"].as_str().unwrap_or("unknown").to_string();
 
-    let url = find_asset(&release, platform::PIPER_PAT)
-        .with_context(|| format!("no piper asset matching '{}' in release {tag}", platform::PIPER_PAT))?;
+    let url = find_asset(&release, pat)
+        .with_context(|| format!("no piper asset matching '{pat}' in release {tag}"))?;
 
     let data = fetch_with_progress(client, app, "piper.zip", &url).await?;
 

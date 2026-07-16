@@ -9,11 +9,14 @@ export interface BinariesStatus {
 }
 
 export interface SetupStatus {
+  /** Core agent ready: chat model + llama. Piper is not required. */
   ready: boolean;
   chat_model: string;
   embed_model_ready: boolean;
   /** Parakeet TDT ONNX model files present */
   stt_model_ready: boolean;
+  /** Host STT path: ONNX model + parakeet launcher both present */
+  stt_ready: boolean;
   data_dir: string;
   binaries: BinariesStatus;
 }
@@ -25,6 +28,15 @@ export interface DownloadProgress {
   done: boolean;
 }
 
+export interface PrerequisiteCheck {
+  id: string;
+  label: string;
+  status: 'ok' | 'missing' | 'degraded' | 'not_applicable';
+  guidance: string | null;
+  applicable: boolean;
+  install_helper_exception: string | null;
+}
+
 export interface SystemDeps {
   /** "windows" | "linux" | "macos" */
   platform: string;
@@ -33,6 +45,8 @@ export interface SystemDeps {
   vulkan_ok: boolean;
   llama_server_ok: boolean;
   llama_server_msg: string;
+  /** Structured detect+suggest rows */
+  prerequisites: PrerequisiteCheck[];
 }
 
 

@@ -110,14 +110,16 @@ export function SystemRequirements({ onChange }: Props) {
                   ok={deps.vcredist_ok && deps.llama_server_ok}
                   label="Visual C++ Runtime 2022"
                   okNote="installed"
-                  failNote={deps.vcredist_ok
-                    ? 'installed but outdated — needs update'
-                    : 'not installed — required for llama-server'}
+                  failNote={guidanceFor(deps, 'vcredist')
+                    ?? (deps.vcredist_ok
+                      ? 'installed but outdated — needs update'
+                      : 'not installed — required for llama-server')}
                   action={!deps.llama_server_ok && !installing && !installDone ? (
                     <button
                       className="primary"
                       onClick={handleInstallVCRedist}
                       style={{ fontSize: 11, padding: '2px 10px' }}
+                      title="Documented exception: optional silent VCRedist helper"
                     >
                       {deps.vcredist_ok ? 'update (~7 MB)' : 'install (~7 MB)'}
                     </button>
@@ -159,13 +161,12 @@ export function SystemRequirements({ onChange }: Props) {
               ok={deps.vulkan_ok}
               label={deps.platform === 'macos' ? 'Metal / GPU' : 'Vulkan Runtime'}
               okNote="detected"
-              failNote={
-                deps.platform === 'macos'
+              failNote={guidanceFor(deps, 'vulkan')
+                ?? (deps.platform === 'macos'
                   ? 'GPU stack not detected'
                   : deps.platform === 'windows'
                     ? 'not found — update GPU drivers (AMD / Nvidia / Intel)'
-                    : 'not found — install mesa-vulkan-drivers / amdvlk / nvidia drivers'
-              }
+                    : 'not found — install mesa-vulkan-drivers / amdvlk / nvidia drivers')}
             />
 
             {/* llama-server test — all platforms */}
@@ -173,7 +174,7 @@ export function SystemRequirements({ onChange }: Props) {
               ok={deps.llama_server_ok}
               label="llama-server binary"
               okNote={deps.llama_server_msg}
-              failNote={deps.llama_server_msg}
+              failNote={guidanceFor(deps, 'llama_server') ?? deps.llama_server_msg}
               action={!deps.llama_server_ok ? (
                 <button
                   onClick={async () => { await invoke('open_llama_diagnostic'); }}
@@ -198,6 +199,11 @@ export function SystemRequirements({ onChange }: Props) {
       </div>
     </div>
   );
+}
+
+function guidanceFor(deps: SystemDeps, id: string): string | undefined {
+  const row = deps.prerequisites?.find(p => p.id === id);
+  return row?.guidance ?? undefined;
 }
 
 function Row({ ok, label, okNote, failNote, action }: {

@@ -108,7 +108,7 @@ fn find_piper() -> Result<std::path::PathBuf> {
     }
 
     Err(anyhow::anyhow!(
-        "piper not found. Tried binaries/piper/. Run: deno task setup"
+        "piper not found. Tried binaries/piper/. Open Setup repair to restore app-managed artifacts."
     ))
 }
 
@@ -126,7 +126,7 @@ fn find_tts_model() -> Result<std::path::PathBuf> {
     candidates.into_iter()
         .find(|p| p.exists())
         .ok_or_else(|| anyhow::anyhow!(
-            "piper voice model not found — run: deno task setup"
+            "piper voice model not found — open Setup repair to restore app-managed artifacts"
         ))
 }
 

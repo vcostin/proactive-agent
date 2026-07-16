@@ -13,9 +13,9 @@ export default function App() {
   const [setupStatus, setSetupStatus] = useState<SetupStatus | null>(null);
   const [tab, setTab] = useState<Tab>('chat');
   const [activeModel, setActiveModel] = useState('');
+  /** Explicit Setup repair — reopens the wizard without clearing memory/config. */
+  const [repairOpen, setRepairOpen] = useState(false);
 
-  // Check setup on mount and whenever the window gains focus (catches
-  // the case where the user downloads a model while the wizard is open)
   const refreshStatus = () => {
     invoke<SetupStatus>('get_setup_status').then(s => {
       setSetupStatus(s);
@@ -31,10 +31,10 @@ export default function App() {
 
   const handleSetupComplete = (modelPath: string) => {
     setActiveModel(modelPath);
+    setRepairOpen(false);
     refreshStatus();
   };
 
-  // Still loading
   if (setupStatus === null) {
     return (
       <div style={{
@@ -46,22 +46,25 @@ export default function App() {
     );
   }
 
-  // Show wizard when: no model selected, OR required binaries are missing.
-  // Binaries missing → wizard lands on Step 1 (download tools).
-  // No model → wizard lands on Step 3 (pick chat model).
-  const binariesMissing = !setupStatus.binaries.llama_ready || !setupStatus.binaries.piper_ready;
-  if (!setupStatus.ready || binariesMissing) {
-    return <SetupWizard status={setupStatus} onComplete={handleSetupComplete} />;
+  // Core agent gate lives in Rust (`ready` = chat model + llama). Piper is not required.
+  // Forced re-entry when Core requirements are missing remains the safety net.
+  const needsSetup = !setupStatus.ready;
+  if (needsSetup || repairOpen) {
+    return (
+      <SetupWizard
+        status={setupStatus}
+        repair={repairOpen && setupStatus.ready}
+        onComplete={handleSetupComplete}
+        onClose={repairOpen ? () => { setRepairOpen(false); refreshStatus(); } : undefined}
+      />
+    );
   }
 
-  // Main app
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
 
-      {/* ── Requirements banner (shown when llama-server can't start) ── */}
       <RequirementsBanner />
 
-      {/* ── Tab bar ── */}
       <nav style={{
         display: 'flex', alignItems: 'center', gap: 4,
         padding: '6px 12px', borderBottom: '1px solid var(--border)',
@@ -82,7 +85,17 @@ export default function App() {
           </button>
         ))}
 
-        {/* Active model pill */}
+        <button
+          onClick={() => setRepairOpen(true)}
+          style={{
+            marginLeft: 8, fontSize: 11, padding: '4px 12px',
+            color: 'var(--text-muted)',
+          }}
+          title="Re-check system prerequisites and app-managed artifacts"
+        >
+          Setup repair
+        </button>
+
         {activeModel && (
           <button
             onClick={() => setTab('models')}
@@ -98,7 +111,6 @@ export default function App() {
         )}
       </nav>
 
-      {/* ── Content — all tabs stay mounted, only visibility changes ── */}
       <main style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
         <TabPanel visible={tab === 'chat'}>
           <ChatWindow

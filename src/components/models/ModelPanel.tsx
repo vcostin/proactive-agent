@@ -86,7 +86,7 @@ export function ModelPanel({ activeModel, onModelLoaded, onModelCleared }: Props
         {activeModel && (
           <button
             onClick={async () => {
-              if (!confirm('Unload the current model and return to setup?')) return;
+              if (!confirm('Unload the current model and return to the Setup Wizard?\n\nTip: use “setup repair” in the nav to fix artifacts without unloading.')) return;
               setClearing(true);
               try {
                 await invoke('clear_model');

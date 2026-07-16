@@ -44,19 +44,10 @@ fn verify_sha256(data: &[u8], expected_hex: &str) -> bool {
     actual == expected_hex
 }
 
-// ── Setup / first-run ────────────────────────────────────────────────────────
+// ── Setup / Setup repair ─────────────────────────────────────────────────────
 
-#[derive(Serialize)]
-pub struct SetupStatus {
-    pub ready: bool,
-    pub chat_model: String,
-    pub embed_model_ready: bool,
-    /// Parakeet TDT ONNX model files present in binaries/parakeet/models/
-    pub stt_model_ready: bool,
-    pub data_dir: String,
-    /// Whether llama-server and piper binaries are present and ready.
-    pub binaries: crate::binary_store::BinariesStatus,
-}
+pub use crate::setup::status::SetupStatus;
+pub use crate::setup::prerequisites::SystemDeps;
 
 #[derive(Clone, Serialize)]
 pub struct DownloadProgress {
@@ -66,22 +57,44 @@ pub struct DownloadProgress {
     pub done: bool,
 }
 
-/// Returns current setup state — drives the first-run wizard.
+/// Returns current setup state — drives first-run Setup Wizard and Setup repair.
 #[tauri::command]
 pub async fn get_setup_status(config: State<'_, SharedConfig>) -> CmdResult<SetupStatus> {
     let cfg = config.read().await;
-    Ok(SetupStatus {
-        ready: cfg.is_ready(),
-        chat_model: cfg.chat_model.clone(),
-        embed_model_ready: cfg.embed_model_path().exists(),
-        stt_model_ready: crate::config::AppConfig::stt_model_ready(),
-        data_dir: cfg.models_dir
-            .parent()
-            .unwrap_or(&cfg.models_dir)
-            .to_string_lossy()
-            .into_owned(),
-        binaries: crate::binary_store::check_binaries(),
-    })
+    let data_dir = cfg
+        .models_dir
+        .parent()
+        .unwrap_or(&cfg.models_dir)
+        .to_string_lossy()
+        .into_owned();
+    Ok(crate::setup::build_setup_status(
+        &cfg.chat_model,
+        &cfg.models_dir,
+        &crate::binaries_dir(),
+        data_dir,
+    ))
+}
+
+/// Catalog verify status for the current Platform module (fixture-friendly seam).
+#[tauri::command]
+pub async fn verify_platform_artifacts(config: State<'_, SharedConfig>) -> CmdResult<Vec<crate::platform::VerifyStatus>> {
+    let cfg = config.read().await;
+    let roots = crate::platform::LayoutRoots {
+        binaries: crate::binaries_dir(),
+        models: cfg.models_dir.clone(),
+    };
+    let module = crate::platform::current_module();
+    Ok(crate::platform::verify_catalog(module.artifacts(), &roots))
+}
+
+/// JSON projection of the current Platform-module catalog (Developer setup consumer).
+#[tauri::command]
+pub async fn get_artifact_catalog() -> CmdResult<crate::platform::artifact::CatalogProjection> {
+    let module = crate::platform::current_module();
+    Ok(crate::platform::artifact::project_catalog(
+        module.id().as_str(),
+        module.artifacts(),
+    ))
 }
 
 /// Check which sidecar binaries are present without triggering a download.
@@ -117,71 +130,92 @@ pub async fn pick_model_file(app_handle: tauri::AppHandle) -> CmdResult<Option<S
     Ok(path.map(|p| p.to_string()))
 }
 
-/// Download required models (nomic-embed-text + Parakeet TDT STT).
+/// Download app-managed models from the current Platform-module catalog
+/// (embed + Host STT assets with Url sources). Idempotent when files exist.
 /// Emits `download_progress` events.
 #[tauri::command]
 pub async fn download_required_models(
     config: State<'_, SharedConfig>,
     app_handle: tauri::AppHandle,
 ) -> CmdResult<()> {
-    let (models_dir, embed_path) = {
+    let models_dir = {
         let cfg = config.read().await;
-        (cfg.models_dir.clone(), cfg.embed_model_path())
+        cfg.models_dir.clone()
     };
 
     std::fs::create_dir_all(&models_dir).map_err(to_cmd_err)?;
+    let roots = crate::platform::LayoutRoots {
+        binaries: crate::binaries_dir(),
+        models: models_dir,
+    };
 
-    // Parakeet model files go into binaries/parakeet/models/
-    let stt_model_dir = crate::config::AppConfig::stt_model_dir();
-    std::fs::create_dir_all(&stt_model_dir).map_err(to_cmd_err)?;
-    use crate::constants::*;
-    let parakeet_onnx   = stt_model_dir.join(STT_MODEL_FILE);
-    let parakeet_tokens = stt_model_dir.join(STT_TOKENS_FILE);
-
-    let downloads: &[(&str, &str, &std::path::Path)] = &[
-        (EMBED_MODEL_FILE, EMBED_MODEL_URL, &embed_path),
-        (STT_MODEL_FILE,   STT_MODEL_URL,   &parakeet_onnx),
-        (STT_TOKENS_FILE,  STT_TOKENS_URL,  &parakeet_tokens),
-    ];
-
+    let module = crate::platform::current_module();
     let client = reqwest::Client::new();
 
-    for (filename, url, dest) in downloads {
-        if dest.exists() {
-            let _ = app_handle.emit("download_progress", DownloadProgress {
-                filename: filename.to_string(),
-                downloaded: dest.metadata().map(|m| m.len()).unwrap_or(0),
-                total: dest.metadata().map(|m| m.len()).unwrap_or(0),
-                done: true,
-            });
+    for def in module.artifacts() {
+        let url = match &def.source {
+            crate::platform::ArtifactSource::Url { url } => *url,
+            _ => continue,
+        };
+        // Wizard model step: embed + STT files (not TTS voice — out of Host bar)
+        if !matches!(def.id, "embed-model" | "stt-model" | "stt-tokens") {
             continue;
         }
 
-        let resp = client.get(*url).send().await.map_err(to_cmd_err)?;
+        let dest = roots.resolve(def);
+        crate::platform::artifact::ensure_dest_dir(&dest).map_err(to_cmd_err)?;
+
+        if dest.exists() {
+            let len = dest.metadata().map(|m| m.len()).unwrap_or(0);
+            let _ = app_handle.emit(
+                "download_progress",
+                DownloadProgress {
+                    filename: def.filename.to_string(),
+                    downloaded: len,
+                    total: len,
+                    done: true,
+                },
+            );
+            continue;
+        }
+
+        // Download to a temp file first so a partial failure does not destroy
+        // a previously-good artifact (none here) and leaves incomplete files aside.
+        let tmp = dest.with_extension("download-partial");
+        let resp = client.get(url).send().await.map_err(to_cmd_err)?;
         let total = resp.content_length().unwrap_or(0);
         let mut downloaded = 0u64;
-
         let mut stream = resp.bytes_stream();
-        let mut file = tokio::fs::File::create(dest).await.map_err(to_cmd_err)?;
+        let mut file = tokio::fs::File::create(&tmp).await.map_err(to_cmd_err)?;
 
         while let Some(chunk) = stream.next().await {
             let chunk = chunk.map_err(to_cmd_err)?;
-            tokio::io::AsyncWriteExt::write_all(&mut file, &chunk).await.map_err(to_cmd_err)?;
+            tokio::io::AsyncWriteExt::write_all(&mut file, &chunk)
+                .await
+                .map_err(to_cmd_err)?;
             downloaded += chunk.len() as u64;
-            let _ = app_handle.emit("download_progress", DownloadProgress {
-                filename: filename.to_string(),
+            let _ = app_handle.emit(
+                "download_progress",
+                DownloadProgress {
+                    filename: def.filename.to_string(),
+                    downloaded,
+                    total,
+                    done: false,
+                },
+            );
+        }
+        drop(file);
+        tokio::fs::rename(&tmp, &dest).await.map_err(to_cmd_err)?;
+
+        let _ = app_handle.emit(
+            "download_progress",
+            DownloadProgress {
+                filename: def.filename.to_string(),
                 downloaded,
                 total,
-                done: false,
-            });
-        }
-
-        let _ = app_handle.emit("download_progress", DownloadProgress {
-            filename: filename.to_string(),
-            downloaded,
-            total,
-            done: true,
-        });
+                done: true,
+            },
+        );
     }
 
     Ok(())
@@ -245,8 +279,8 @@ pub async fn start_voice_input(
             return Err(format!(
                 "Speech-to-text is not running on port {stt_port} (Parakeet). \
                  Waveform works, but nothing will be transcribed. \
-                 On Linux: deno task setup installs a launcher that starts with the app. \
-                 Manual: deno task parakeet:linux — or type instead."
+                 Open Setup repair to restore Host STT app-managed artifacts, \
+                 or on Linux run: deno task parakeet:linux — or type instead."
             ));
         }
     }
@@ -374,19 +408,8 @@ pub async fn stop_voice_input(
 
 // ── Dependency checks ─────────────────────────────────────────────────────────
 
-#[derive(Serialize)]
-pub struct SystemDeps {
-    /// "windows" | "linux" | "macos" — UI hides Windows-only rows on other OSes
-    pub platform: String,
-    /// Only meaningful on Windows; always true elsewhere
-    pub vcredist_ok: bool,
-    pub vulkan_ok: bool,
-    /// Result of actually running llama-server --version
-    pub llama_server_ok: bool,
-    pub llama_server_msg: String,
-}
-
-/// Check system-level dependencies required by the sidecar binaries.
+/// Check system-level prerequisites (detect + suggest). Returns structured rows
+/// plus the legacy flat fields for existing UI.
 #[tauri::command]
 pub async fn check_system_deps() -> CmdResult<SystemDeps> {
     let platform = if cfg!(target_os = "windows") {
@@ -398,28 +421,27 @@ pub async fn check_system_deps() -> CmdResult<SystemDeps> {
     }
     .to_string();
 
-    let vcredist_ok = {
+    let vcredist_present = {
         #[cfg(target_os = "windows")]
         {
             std::path::Path::new("C:\\Windows\\System32\\VCRUNTIME140_1.dll").exists()
         }
         #[cfg(not(target_os = "windows"))]
         {
-            true // not applicable
+            true
         }
     };
 
     let vulkan_ok = detect_vulkan();
-
     let (llama_server_ok, llama_server_msg) = test_llama_binary().await;
-
-    Ok(SystemDeps {
-        platform,
-        vcredist_ok,
+    let report = crate::setup::report_from_live(
+        &platform,
+        vcredist_present,
         vulkan_ok,
         llama_server_ok,
-        llama_server_msg,
-    })
+        llama_server_msg.clone(),
+    );
+    Ok(SystemDeps::from_report(report, llama_server_msg))
 }
 
 fn detect_vulkan() -> bool {
@@ -470,7 +492,7 @@ fn detect_vulkan() -> bool {
 async fn test_llama_binary() -> (bool, String) {
     let binary = match crate::find_sidecar("llama-server") {
         Some(b) => b,
-        None => return (false, "binary not found — run: deno task setup".to_string()),
+        None => return (false, "binary not found — open Setup repair to restore app-managed artifacts".to_string()),
     };
     let lib_dir = binary.parent()
         .map(|p| p.to_path_buf())
@@ -526,7 +548,7 @@ async fn test_llama_binary() -> (bool, String) {
                 #[cfg(target_os = "windows")]
                 {
                     let desc = match code as u32 {
-                        0xC0000135 => "DLL not found — re-run: deno task setup".to_string(),
+                        0xC0000135 => "DLL not found — open Setup repair or install Visual C++ Redistributable".to_string(),
                         0xC0000139 => "DLL version mismatch — install Visual C++ Redistributable".to_string(),
                         0xC0000005 => "crash (access violation)".to_string(),
                         _ => format!("exited with code {code:#X}"),
