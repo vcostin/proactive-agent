@@ -1,9 +1,12 @@
 #![allow(dead_code)]
 use anyhow::{bail, Context, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use cpal::{SampleFormat, SampleRate, SupportedStreamConfig};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
+
+use crate::constants::STT_SAMPLE_RATE;
 
 /// RMS level above which audio is considered speech.
 /// Low threshold = capture more, rely on STT to ignore noise.
@@ -29,24 +32,31 @@ impl AudioCapture {
         let host = cpal::default_host();
         let device = resolve_input_device(&host)?;
 
-        let supported = device
-            .default_input_config()
-            .context("cannot get default input config")?;
+        let supported = pick_input_config(&device)?;
 
         let device_name = device.name().unwrap_or_else(|_| "unknown".to_string());
         let sample_rate = supported.sample_rate().0;
         let channels = supported.channels();
         let channels_usize = channels as usize;
-        // Use device native config — not all devices support forced mono
-        // prepare_for_stt() handles the stereo→mono downmix before transcription
+        let sample_format = supported.sample_format();
+        // prepare_for_stt() handles stereo→mono and rate conversion when needed
         let config: cpal::StreamConfig = supported.into();
+
+        // Visible in the tauri-dev terminal so Host STT capture format is checkable.
+        eprintln!(
+            "[AUDIO] capture config: {sample_rate} Hz, {channels} ch, {sample_format:?} ({device_name})"
+        );
 
         let vad_active = Arc::new(AtomicBool::new(false));
         let energy_bits = Arc::new(AtomicU32::new(0));
         let vad_clone = vad_active.clone();
         let energy_clone = energy_bits.clone();
-        // Also update the shared energy so the UI can animate in real-time
         let energy_shared = energy_out;
+
+        // We only build an f32 stream — pick_input_config prefers F32.
+        if sample_format != SampleFormat::F32 {
+            bail!("expected F32 capture format, got {sample_format:?}");
+        }
 
         let stream = device
             .build_input_stream::<f32, _, _>(
@@ -60,7 +70,6 @@ impl AudioCapture {
                     vad_clone.store(speech, Ordering::Relaxed);
 
                     if speech {
-                        // Non-blocking — drop the frame if the receiver is busy
                         let _ = audio_tx.try_send(data.to_vec());
                     }
                 },
@@ -88,6 +97,48 @@ impl AudioCapture {
     pub fn is_active(&self) -> bool {
         self.vad_active.load(Ordering::Relaxed)
     }
+}
+
+/// Choose a capture config that minimizes resampling before STT.
+///
+/// Pulse's default is often 44100 stereo F32 while the USB mic runs at 48000.
+/// Opening at 44100 forces PipeWire 48k→44.1k then our 44.1k→16k — double
+/// resample that blurs fricatives (/f/ vs /s/). Prefer mono @ 16 kHz, then
+/// mono @ 48 kHz, then mono @ 44.1 kHz, then the device default.
+pub fn pick_input_config(device: &cpal::Device) -> Result<SupportedStreamConfig> {
+    with_probe_muted(|| {
+        let preferred_rates = [STT_SAMPLE_RATE, 48_000, 44_100];
+        if let Ok(ranges) = device.supported_input_configs() {
+            let ranges: Vec<_> = ranges.collect();
+            // 1) mono F32 at preferred rates
+            for &rate in &preferred_rates {
+                for range in &ranges {
+                    if range.channels() == 1
+                        && range.sample_format() == SampleFormat::F32
+                        && range.min_sample_rate().0 <= rate
+                        && range.max_sample_rate().0 >= rate
+                    {
+                        return Ok(range.clone().with_sample_rate(SampleRate(rate)));
+                    }
+                }
+            }
+            // 2) stereo F32 at 48 kHz / 16 kHz (better than default 44.1k)
+            for &rate in &[48_000u32, STT_SAMPLE_RATE] {
+                for range in &ranges {
+                    if range.channels() == 2
+                        && range.sample_format() == SampleFormat::F32
+                        && range.min_sample_rate().0 <= rate
+                        && range.max_sample_rate().0 >= rate
+                    {
+                        return Ok(range.clone().with_sample_rate(SampleRate(rate)));
+                    }
+                }
+            }
+        }
+        device
+            .default_input_config()
+            .context("cannot get default input config")
+    })
 }
 
 /// Suppress ALSA/JACK probe spam that cpal triggers when enumerating devices.
@@ -262,5 +313,31 @@ mod tests {
         let stereo = frame_rms(&data, 2);
         assert!(stereo > left_only);
         assert!((stereo - right).abs() < 1e-6);
+    }
+
+    #[test]
+    fn pick_input_config_prefers_mono_stt_rate_when_advertised() {
+        // Pulse advertises 1..=768000 for mono F32 — we must not keep 44100 stereo default.
+        quiet_backend_probe_noise();
+        let host = cpal::default_host();
+        let Ok(device) = resolve_input_device(&host) else {
+            // No mic in CI — skip
+            return;
+        };
+        let Ok(cfg) = pick_input_config(&device) else {
+            return;
+        };
+        assert_eq!(cfg.sample_format(), SampleFormat::F32);
+        // Prefer mono @ 16 kHz when the device claims to support it (Pulse does).
+        if cfg.channels() == 1 {
+            assert_eq!(cfg.sample_rate().0, STT_SAMPLE_RATE);
+        } else {
+            // Fallback path: at least avoid the bad 44100 default when 48k is available.
+            assert_ne!(
+                (cfg.channels(), cfg.sample_rate().0),
+                (2, 44_100),
+                "should not keep Pulse default 44100 stereo"
+            );
+        }
     }
 }

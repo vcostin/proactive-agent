@@ -4,7 +4,8 @@ pub mod stt;
 pub mod tts;
 
 pub use capture::{
-    frame_rms, quiet_backend_probe_noise, resolve_input_device, resolve_output_device, AudioCapture,
+    frame_rms, pick_input_config, quiet_backend_probe_noise, resolve_input_device,
+    resolve_output_device, AudioCapture,
 };
 pub use stt::SttClient;
 pub use tts::TtsClient;
@@ -37,13 +38,27 @@ fn prepare_for_stt(samples: &[f32], device_rate: u32, channels: u16) -> (Vec<f32
                   WindowFunction, Resampler};
     use crate::constants::STT_SAMPLE_RATE;
 
-    // Step 1: downmix to mono
+    // Step 1: downmix to mono — take the louder channel (not average).
+    // Averaging near-duplicate stereo from a mono USB mic can still notch
+    // high frequencies when channels are slightly out of phase.
     let mono: Vec<f32> = if channels <= 1 {
         samples.to_vec()
     } else {
         let ch = channels as usize;
-        samples.chunks(ch)
-            .map(|frame| frame.iter().sum::<f32>() / ch as f32)
+        let mut left_e = 0.0f32;
+        let mut right_e = 0.0f32;
+        for frame in samples.chunks(ch) {
+            if !frame.is_empty() {
+                left_e += frame[0] * frame[0];
+            }
+            if frame.len() > 1 {
+                right_e += frame[1] * frame[1];
+            }
+        }
+        let take = if right_e > left_e { 1 } else { 0 };
+        samples
+            .chunks(ch)
+            .filter_map(|frame| frame.get(take).copied())
             .collect()
     };
 
