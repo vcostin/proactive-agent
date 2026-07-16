@@ -2,12 +2,15 @@
 
 **Goal:** Replace the Parakeet HTTP sidecar (Windows PyInstaller **or** Linux managed
 Python launcher from `deno task setup`) with direct ONNX inference inside the Rust
-process using the `ort` crate. Same model, same accuracy, no Python.
+process using the `ort` crate. Same model, same greedy-CTC behaviour, no Python.
+**Cutover:** hard — sidecar removed when the Host verification gate in ADR 0001 passes
+(see `docs/adr/0001-host-stt-ort-hard-cutover.md`). No dual Host STT path.
 
 **Hardware constraint:** CPU only. GPU is reserved exclusively for the LLM.
 
-**Interim (July 2026):** Linux mic works via auto-spawned launcher + `.cache/parakeet-tdt/`.
-That path is explicitly temporary — this document removes it.
+**Host STT readiness after cutover:** Parakeet ONNX + tokens + ONNX Runtime shared
+library as **app-managed artifacts** (Platform catalog / Setup Wizard / Developer setup).
+Not a system-installed ORT; not the Parakeet launcher.
 
 ---
 
@@ -178,16 +181,17 @@ app.manage(Arc::new(stt_client));
 
 ## Verification checklist
 
-- [ ] `cargo check` passes, zero references to `parakeet-server` in source
-- [ ] `SttClient::new()` loads model without panic on app startup
-- [ ] Mel spectrogram output matches Python server output within 1e-4 (unit test)
-- [ ] English 5s utterance → accurate transcript in < 2s on modern CPU
-- [ ] Non-native accent utterance → transcript quality same as current Parakeet server
-- [ ] No GPU memory consumed during STT (verify with task manager)
-- [ ] SidecarHealth debug panel: parakeet row removed
-- [ ] Port 5092 no longer appears in monitor loop
-- [ ] `parakeet-server-*.exe` removed from `tauri.conf.json` externalBin
-- [ ] Wizard no longer shows a binary placeholder row for parakeet
+Merge / sidecar delete on Host OS is gated by ADR 0001:
+
+- [ ] Mel unit test: fixture PCM → Rust mel vs Python/`onnx-asr` within ±1e-4
+- [ ] Fixture transcript parity: checked-in WAVs; `ort` greedy CTC matches sidecar (or agreed normalize)
+- [ ] CPU-only STT EP; no STT GPU/VRAM use
+- [ ] Host STT ready = model + tokens + ONNX Runtime lib (app-managed); launcher removed from catalog/ready
+- [ ] Soft-fail path: Core agent up; maximum Host-debuggable diagnostics
+- [ ] Cleanup: no `parakeet-server` / `:5092` / SidecarHealth parakeet row / wizard launcher row
+- [ ] Manual Host mic smoke (necessary, not sufficient)
+
+Out of this iteration: TTS, GPU offload slider, wizard mic sample-rate UX, decoder biasing / face-space quality, Guest OS STT parity.
 
 ---
 
@@ -208,12 +212,16 @@ app.manage(Arc::new(stt_client));
 
 ## What does NOT change
 
-- `audio/capture.rs` — VAD, energy reporting, cpal stream
-- `audio/mod.rs` — rubato resampling, amplify, clean_transcript, VAD loop structure
+- `audio/capture.rs` — VAD, energy reporting, cpal stream; STT input contract (session negotiate + per-utterance convert to mono @ 16 kHz)
+- `audio/mod.rs` — rubato resampling, amplify, clean_transcript, VAD loop structure (aside from `spawn_blocking` for ort)
 - `audio/tts.rs` — Piper subprocess, unchanged
-- All Tauri commands except voice-input plumbing
-- The wizard model download (`.onnx` and tokens files already downloaded)
 - Frontend voice toggle, waveform, transcript routing
+- TTS product scope, GPU offload slider, decoder biasing / face-space quality, Guest OS STT parity
+
+## What does change in setup
+
+- Platform catalog / wizard: drop `parakeet-server` from Host STT readiness; add ONNX Runtime shared lib as app-managed artifact
+- Host STT ready = model + tokens + ORT lib; soft-fail keeps Core agent up with max Host debug
 
 ---
 
