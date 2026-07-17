@@ -252,11 +252,12 @@ TTS_JSON_META="$TTS_DIR/${TTS_FILE}.json"
 if [[ ! -f "$TTS_ONNX" ]]; then
   echo "  Downloading piper voice model ($TTS_FILE)..."
   download "$TTS_URL" "$TTS_ONNX"
-  download "${TTS_URL}.json" "$TTS_JSON_META" || true
-  echo "  OK piper voice model"
-else
-  echo "  OK piper voice model (already present)"
 fi
+if [[ ! -f "$TTS_JSON_META" ]]; then
+  echo "  Downloading piper voice config (${TTS_FILE}.json)..."
+  download "${TTS_URL}.json" "$TTS_JSON_META"
+fi
+echo "  OK piper voice model"
 
 echo
 echo "[3/5] Models"

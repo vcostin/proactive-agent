@@ -28,6 +28,16 @@ export interface DownloadProgress {
   downloaded: number;
   total: number;
   done: boolean;
+  /** Set for curated Piper voice downloads. */
+  voice_id?: string;
+}
+
+/** Curated Piper voice row for Settings/Voice picker. */
+export interface CuratedPiperVoice {
+  id: string;
+  label: string;
+  locale: string;
+  installed: boolean;
 }
 
 export interface PrerequisiteCheck {

@@ -33,6 +33,14 @@ pub struct AppConfig {
     pub recent_turns_window: usize,
     pub temperature: f32,
     pub top_p: f32,
+
+    /// Stable Piper voice id for speak (e.g. `en_US-lessac-medium`).
+    #[serde(default = "default_tts_voice_id")]
+    pub tts_voice_id: String,
+}
+
+fn default_tts_voice_id() -> String {
+    crate::constants::TTS_DEFAULT_VOICE_ID.to_string()
 }
 
 impl AppConfig {
@@ -76,6 +84,7 @@ impl AppConfig {
             recent_turns_window: 10,
             temperature: 0.7,
             top_p: 0.95,
+            tts_voice_id: default_tts_voice_id(),
         }
     }
 
@@ -120,3 +129,69 @@ impl AppConfig {
         crate::binaries_dir().join(crate::constants::ORT_LIB_REL_DIR)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use uuid::Uuid;
+
+    fn temp_config_path(label: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "pa-config-{}-{}-{}.json",
+            label,
+            std::process::id(),
+            Uuid::new_v4()
+        ))
+    }
+
+    #[test]
+    fn default_config_uses_lessac_medium_voice_id() {
+        let cfg = AppConfig::with_data_dir(PathBuf::from("/tmp/pa-data"));
+        assert_eq!(cfg.tts_voice_id, "en_US-lessac-medium");
+    }
+
+    #[test]
+    fn load_without_voice_id_field_defaults_to_lessac() {
+        let path = temp_config_path("no-voice");
+        // Minimal legacy config JSON — no tts_voice_id key.
+        std::fs::write(
+            &path,
+            r#"{
+                "chat_model": "",
+                "models_dir": "/tmp/models",
+                "db_path": "/tmp/db",
+                "llama_port": 18080,
+                "embed_port": 18081,
+                "stt_port": 5092,
+                "audio_device": null,
+                "embed_model": "nomic-embed-text",
+                "embed_model_file": "nomic-embed-text-v1.5.Q8_0.gguf",
+                "persona_prompt": "hi",
+                "context_window_tokens": 4096,
+                "top_k_episodic": 5,
+                "top_k_semantic": 5,
+                "recent_turns_window": 10,
+                "temperature": 0.7,
+                "top_p": 0.95
+            }"#,
+        )
+        .unwrap();
+
+        let cfg = AppConfig::load(&path, PathBuf::from("/tmp/pa-data"));
+        assert_eq!(cfg.tts_voice_id, "en_US-lessac-medium");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn saved_voice_id_survives_reload() {
+        let path = temp_config_path("persist-voice");
+        let mut cfg = AppConfig::with_data_dir(PathBuf::from("/tmp/pa-data"));
+        cfg.tts_voice_id = "en_US-joe-medium".into();
+        cfg.save(&path).unwrap();
+
+        let loaded = AppConfig::load(&path, PathBuf::from("/tmp/pa-data"));
+        assert_eq!(loaded.tts_voice_id, "en_US-joe-medium");
+        let _ = std::fs::remove_file(&path);
+    }
+}
+

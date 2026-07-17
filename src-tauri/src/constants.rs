@@ -27,7 +27,12 @@ pub const EMBED_MODEL_FILE: &str = "nomic-embed-text-v1.5.Q8_0.gguf";
 /// string used in embedding HTTP requests.
 pub const EMBED_MODEL_ALIAS: &str = "nomic-embed-text";
 
-/// Piper TTS voice model filename inside `models/tts/`.
+/// Default Piper voice id (stable config value; files live under `models/tts/`).
+/// Must stay in sync with [`TTS_MODEL_FILE`]’s stem.
+pub const TTS_DEFAULT_VOICE_ID: &str = "en_US-lessac-medium";
+
+/// Piper TTS default voice `.onnx` filename inside `models/tts/`.
+/// Stem must match [`TTS_DEFAULT_VOICE_ID`].
 pub const TTS_MODEL_FILE: &str = "en_US-lessac-medium.onnx";
 
 /// Directory under binaries/ holding Host STT model artifacts.

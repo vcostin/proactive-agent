@@ -11,8 +11,8 @@ use crate::monitor::{AudioState, MemoryStats, ModelInfo, SystemStatus};
 use crate::orchestrator::context::AssembledContext;
 use crate::monitor::SharedEventLog;
 use crate::{
-    SharedAudioEnergy, SharedChatChild, SharedConfig, SharedOrchestrator, SharedProcessPids,
-    SharedScheduler, SharedSttEngine, SharedVoiceStop,
+    SharedAudioEnergy, SharedChatChild, SharedConfig, SharedOrchestrator, SharedPlaybackGate,
+    SharedProcessPids, SharedScheduler, SharedSttEngine, SharedVoiceStop,
 };
 
 type CmdResult<T> = Result<T, String>;
@@ -58,6 +58,9 @@ pub struct DownloadProgress {
     pub downloaded: u64,
     pub total: u64,
     pub done: bool,
+    /// Set for curated Piper voice downloads; absent for wizard/binary fetches.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub voice_id: Option<String>,
 }
 
 /// Returns current setup state — drives first-run Setup Wizard and Setup repair.
@@ -180,6 +183,7 @@ pub async fn download_required_models(
                     downloaded: len,
                     total: len,
                     done: true,
+                    voice_id: None,
                 },
             );
             continue;
@@ -207,6 +211,7 @@ pub async fn download_required_models(
                     downloaded,
                     total,
                     done: false,
+                    voice_id: None,
                 },
             );
         }
@@ -220,6 +225,7 @@ pub async fn download_required_models(
                 downloaded,
                 total,
                 done: true,
+                voice_id: None,
             },
         );
     }
@@ -227,14 +233,166 @@ pub async fn download_required_models(
     Ok(())
 }
 
+/// Download a curated Piper voice (onnx + json) into `models/tts/`.
+/// Emits `download_progress` while fetching. Does not change `tts_voice_id`.
+#[tauri::command]
+pub async fn download_curated_voice(
+    voice_id: String,
+    config: State<'_, SharedConfig>,
+    app_handle: tauri::AppHandle,
+) -> CmdResult<()> {
+    let tts_dir = {
+        let cfg = config.read().await;
+        cfg.models_dir.join("tts")
+    };
+    download_curated_voice_emitting(&voice_id, &tts_dir, &app_handle).await
+}
+
+async fn download_curated_voice_emitting(
+    voice_id: &str,
+    tts_dir: &std::path::Path,
+    app_handle: &tauri::AppHandle,
+) -> CmdResult<()> {
+    let handle = app_handle.clone();
+    let id = voice_id.to_string();
+    let dir = tts_dir.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        let fetcher = crate::audio::HttpVoiceFileFetcher::new()?;
+        crate::audio::download_curated_piper_voice(&id, &dir, &fetcher, |p| {
+            let _ = handle.emit(
+                "download_progress",
+                DownloadProgress {
+                    filename: p.filename,
+                    downloaded: p.downloaded,
+                    total: p.total,
+                    done: p.done,
+                    voice_id: Some(p.voice_id),
+                },
+            );
+        })
+    })
+    .await
+    .map_err(|e| format!("download task join: {e}"))?
+}
+
+/// Curated Piper shortlist with installed vs available state for Settings/Voice.
+#[tauri::command]
+pub async fn list_curated_voices(
+    config: State<'_, SharedConfig>,
+) -> CmdResult<Vec<crate::audio::CuratedPiperVoice>> {
+    let tts_dir = {
+        let cfg = config.read().await;
+        cfg.models_dir.join("tts")
+    };
+    Ok(crate::audio::list_curated_piper_voices(&tts_dir))
+}
+
+/// Currently selected Piper voice id (may fall back at speak time if files missing).
+#[tauri::command]
+pub async fn get_tts_voice(config: State<'_, SharedConfig>) -> CmdResult<String> {
+    let cfg = config.read().await;
+    Ok(cfg.tts_voice_id.clone())
+}
+
+/// Persist an installed curated voice as the Voice output selection.
+/// Does not change mute state — mute remains a frontend/speak gate.
+#[tauri::command]
+pub async fn set_tts_voice(
+    voice_id: String,
+    config: State<'_, SharedConfig>,
+    app_handle: tauri::AppHandle,
+) -> CmdResult<()> {
+    let tts_dir = {
+        let cfg = config.read().await;
+        cfg.models_dir.join("tts")
+    };
+    crate::audio::ensure_selectable_piper_voice(&tts_dir, &voice_id)?;
+
+    let mut cfg = config.write().await;
+    cfg.tts_voice_id = voice_id;
+    let config_path = app_handle
+        .path()
+        .app_config_dir()
+        .map_err(|e| format!("config dir: {e}"))?
+        .join("config.json");
+    cfg.save(&config_path).map_err(|e| format!("save config: {e}"))?;
+    Ok(())
+}
+
+/// Preview a curated Piper voice with the fixed sample sentence.
+/// Downloads the voice first when not installed. Does not change `tts_voice_id`.
+/// Replaces any in-flight Piper playback.
+#[tauri::command]
+pub async fn preview_voice(
+    voice_id: String,
+    config: State<'_, SharedConfig>,
+    event_log: State<'_, SharedEventLog>,
+    playback_gate: State<'_, SharedPlaybackGate>,
+    app_handle: tauri::AppHandle,
+) -> CmdResult<()> {
+    let tts_dir = {
+        let cfg = config.read().await;
+        cfg.models_dir.join("tts")
+    };
+
+    if !crate::audio::piper_voice_pair_present(&tts_dir, &voice_id) {
+        download_curated_voice_emitting(&voice_id, &tts_dir, &app_handle).await?;
+    }
+
+    let preview = crate::audio::preview_piper_voice_request(&voice_id);
+    let log = event_log.inner().clone();
+    let gate = playback_gate.inner().clone();
+    let token = gate.begin();
+    crate::monitor::emit_debug_event(
+        &app_handle,
+        &log,
+        "[AUDIO]",
+        format!("TTS preview ({})", preview.voice_id),
+    )
+    .await;
+    tauri::async_runtime::spawn(async move {
+        let client = crate::audio::tts::TtsClient::new(0);
+        match client
+            .speak(
+                &preview.text,
+                &app_handle,
+                &tts_dir,
+                &preview.voice_id,
+                gate,
+                token,
+            )
+            .await
+        {
+            Ok(()) => {
+                crate::monitor::emit_debug_event(&app_handle, &log, "[AUDIO]", "TTS preview done")
+                    .await;
+            }
+            Err(e) => {
+                crate::monitor::emit_debug_event(
+                    &app_handle,
+                    &log,
+                    "[AUDIO]",
+                    format!("TTS preview failed: {e}"),
+                )
+                .await;
+            }
+        }
+    });
+    Ok(())
+}
+
 // ── Text-to-speech output ─────────────────────────────────────────────────────
 
-/// Speak `text` through the default audio output using the sherpa-onnx TTS binary.
+/// Speak `text` through the default audio output using Piper TTS.
 /// Fire-and-forget — returns immediately, audio plays in the background.
+/// Uses the configured Piper voice id (falls back to the default when files are missing).
+/// Starting speak replaces any in-flight Piper playback.
 #[tauri::command]
 pub async fn speak_text(
     text: String,
+    config: State<'_, SharedConfig>,
     event_log: State<'_, SharedEventLog>,
+    playback_gate: State<'_, SharedPlaybackGate>,
     app_handle: tauri::AppHandle,
 ) -> CmdResult<()> {
     // Guard against unbounded piper stdin input
@@ -243,12 +401,19 @@ pub async fn speak_text(
         return Err(format!("text too long for TTS ({} bytes, max {MAX_TTS_BYTES})", text.len()));
     }
 
+    let (tts_dir, voice_id) = {
+        let cfg = config.read().await;
+        (cfg.models_dir.join("tts"), cfg.tts_voice_id.clone())
+    };
+
     let log = event_log.inner().clone();
+    let gate = playback_gate.inner().clone();
+    let token = gate.begin();
     crate::monitor::emit_debug_event(&app_handle, &log, "[AUDIO]",
         format!("TTS triggered ({} chars)", text.len())).await;
     tauri::async_runtime::spawn(async move {
         let client = crate::audio::tts::TtsClient::new(0);
-        match client.speak(&text, &app_handle).await {
+        match client.speak(&text, &app_handle, &tts_dir, &voice_id, gate, token).await {
             Ok(()) => { crate::monitor::emit_debug_event(&app_handle, &log, "[AUDIO]", "TTS done").await; }
             Err(e) => { crate::monitor::emit_debug_event(&app_handle, &log, "[AUDIO]", format!("TTS failed: {e}")).await; }
         }
@@ -575,6 +740,7 @@ pub async fn install_vcredist(app_handle: tauri::AppHandle) -> CmdResult<()> {
             downloaded,
             total,
             done: false,
+            voice_id: None,
         });
     }
     drop(file);
@@ -601,6 +767,7 @@ pub async fn install_vcredist(app_handle: tauri::AppHandle) -> CmdResult<()> {
         downloaded,
         total,
         done: true,
+        voice_id: None,
     });
 
     // Exit code 0 = success, 3010 = success + reboot suggested (not required)
