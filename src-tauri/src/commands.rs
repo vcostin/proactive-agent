@@ -1059,10 +1059,40 @@ pub async fn fire_deferred_now(
     match sched.fire_now(&id) {
         Some(msg) => {
             app_handle.emit("proactive_message", &msg).map_err(to_cmd_err)?;
+            let _ = app_handle.emit("scheduler_updated", ());
             Ok(())
         }
         None => Err(format!("no pending message with id {id}")),
     }
+}
+
+#[tauri::command]
+pub async fn cancel_deferred(
+    scheduler: State<'_, SharedScheduler>,
+    app_handle: tauri::AppHandle,
+    id: String,
+) -> CmdResult<()> {
+    let mut sched = scheduler.lock().await;
+    if sched.cancel(&id) {
+        let _ = app_handle.emit("scheduler_updated", ());
+        Ok(())
+    } else {
+        Err(format!("no pending message with id {id}"))
+    }
+}
+
+/// Drain and return all due deferred messages (including overdue after restart).
+/// Called by the UI on mount so delivery uses the invoke return path, not a racey event.
+#[tauri::command]
+pub async fn flush_due_deferred(
+    scheduler: State<'_, SharedScheduler>,
+    app_handle: tauri::AppHandle,
+) -> CmdResult<Vec<crate::monitor::DeferredMessage>> {
+    let due = scheduler.lock().await.drain_due();
+    if !due.is_empty() {
+        let _ = app_handle.emit("scheduler_updated", ());
+    }
+    Ok(due)
 }
 
 // ── Model management ──────────────────────────────────────────────────────────
@@ -1199,10 +1229,12 @@ pub async fn test_defer(
     };
     let id = msg.id.clone();
     scheduler.lock().await.add(msg);
+    let _ = app_handle.emit("scheduler_updated", ());
     // If after_minutes == 0, fire immediately for testing
     if mins == 0 {
         if let Some(m) = scheduler.lock().await.fire_now(&id) {
             app_handle.emit("proactive_message", &m).map_err(to_cmd_err)?;
+            let _ = app_handle.emit("scheduler_updated", ());
             return Ok(format!("fired immediately: {}", m.message));
         }
     }

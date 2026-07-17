@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { useEffect, useState } from 'react';
 import { SystemStatus } from '../types';
 
@@ -8,6 +9,7 @@ export function useSystemStatus(intervalMs = 5000) {
 
   useEffect(() => {
     let active = true;
+    let unlisten: (() => void) | null = null;
 
     const poll = () => {
       invoke<SystemStatus>('get_system_status')
@@ -17,7 +19,19 @@ export function useSystemStatus(intervalMs = 5000) {
 
     poll();
     const id = setInterval(poll, intervalMs);
-    return () => { active = false; clearInterval(id); };
+
+    listen('scheduler_updated', () => {
+      if (active) poll();
+    }).then(fn => {
+      if (!active) fn();
+      else unlisten = fn;
+    });
+
+    return () => {
+      active = false;
+      clearInterval(id);
+      unlisten?.();
+    };
   }, [intervalMs]);
 
   return { status, error };

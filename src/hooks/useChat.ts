@@ -108,6 +108,12 @@ export function useChat() {
       saveHistory(next);
       return next;
     });
+    // Same voice-output gate as chat replies
+    if (ttsEnabledRef.current && content.trim()) {
+      invoke('speak_text', { text: content }).catch(e =>
+        console.error('[TTS] proactive speak failed:', e),
+      );
+    }
   }, []);
 
   const clearHistory = useCallback(() => {

@@ -56,7 +56,15 @@ pub fn run() {
 
             let config: SharedConfig = Arc::new(RwLock::new(cfg));
             let orchestrator: SharedOrchestrator = Arc::new(Mutex::new(None));
-            let scheduler: SharedScheduler = Arc::new(Mutex::new(ProactivityScheduler::new()));
+            // Load persisted deferred queue; overdue items flush when the UI mounts
+            // (invoke return path — avoids losing events before listeners attach).
+            let queue_path = ProactivityScheduler::queue_path_beside_config(&config_path);
+            let scheduler: SharedScheduler = Arc::new(Mutex::new(
+                ProactivityScheduler::load(queue_path.clone()).unwrap_or_else(|e| {
+                    eprintln!("[SCHEDULER] failed to load deferred queue: {e}");
+                    ProactivityScheduler::with_persist(queue_path)
+                }),
+            ));
             let event_log: SharedEventLog = new_event_log();
             let chat_child: SharedChatChild = Arc::new(Mutex::new(None));
             let voice_stop: SharedVoiceStop = Arc::new(std::sync::Mutex::new(None));
@@ -193,6 +201,8 @@ pub fn run() {
             commands::get_system_status,
             commands::get_last_context,
             commands::fire_deferred_now,
+            commands::cancel_deferred,
+            commands::flush_due_deferred,
             commands::list_models,
             commands::get_debug_events,
             commands::get_gen_settings,
