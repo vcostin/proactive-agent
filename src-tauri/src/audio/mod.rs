@@ -6,6 +6,7 @@ pub mod piper_speak;
 pub mod piper_voice;
 pub mod stt;
 pub mod tts;
+pub mod voice_session;
 
 pub use capture::{
     frame_rms, pick_input_config, quiet_backend_probe_noise, resolve_input_device,
@@ -26,12 +27,14 @@ pub use piper_voice::{
 };
 pub use stt::SttClient;
 pub use tts::{PlaybackGate, PlaybackToken, PiperPlayEngine};
+pub use voice_session::{
+    CaptureBackend, CpalCaptureBackend, DebugEventSessionLog, SessionLog, TranscriptionMode,
+    VoiceSession, VoiceSessionStart,
+};
 
-use anyhow::Result;
 use tauri::Emitter;
 use tokio::sync::mpsc;
 
-const AUDIO_CHANNEL_BUF: usize = 256;
 const SILENCE_MS: u64 = 1000; // 1s silence before sending — captures complete sentences
 const MIC_GAIN: f32 = 1.5;   // kept for API compat, replaced by normalization in amplify()
 /// Keep this much audio before/after the energy island (protects plosive onsets).
@@ -183,24 +186,9 @@ fn clean_transcript(text: &str) -> String {
     t.to_string()
 }
 
-/// Holds the running audio capture. Dropping this stops the mic stream
-/// and closes the audio channel, which shuts down the STT loop.
-pub struct VoiceHandle {
-    pub capture: AudioCapture,
-}
-
-/// Start mic capture. Returns the handle (keeps stream alive) and the
-/// audio frame receiver (pass to run_stt_loop).
-pub fn start_capture() -> Result<(VoiceHandle, mpsc::Receiver<Vec<f32>>)> {
-    let (tx, rx) = mpsc::channel(AUDIO_CHANNEL_BUF);
-    // Use a throwaway energy arc here — start_capture is not the live voice path
-    let capture = AudioCapture::start(tx, std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)))?;
-    Ok((VoiceHandle { capture }, rx))
-}
-
 /// Run the STT loop: accumulate VAD frames, transcribe on silence,
 /// emit `voice_transcript` events to the frontend.
-/// Exits when the audio channel closes (i.e. VoiceHandle is dropped).
+/// Exits when the audio channel closes (capture session stopped / Drop).
 ///
 /// When `stt` is `None`, transcription stays off (soft-fail / not ready) while
 /// the mic path can still deliver frames for waveform/debug.

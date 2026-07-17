@@ -12,24 +12,13 @@ use crate::orchestrator::context::AssembledContext;
 use crate::monitor::SharedEventLog;
 use crate::{
     SharedAudioEnergy, SharedChatChild, SharedConfig, SharedOrchestrator, SharedPiperSpeak,
-    SharedProcessPids, SharedScheduler, SharedSttEngine, SharedVoiceStop,
+    SharedProcessPids, SharedScheduler, SharedSttEngine, SharedVoiceSession,
 };
 
 type CmdResult<T> = Result<T, String>;
 
 fn to_cmd_err(e: impl std::fmt::Display) -> String {
     e.to_string()
-}
-
-/// Emit a debug event from a synchronous context (e.g. std::thread).
-/// AppHandle::emit is sync so this works without an async runtime.
-fn debug_event_sync(app: &tauri::AppHandle, message: String) {
-    use tauri::Emitter;
-    let _ = app.emit("debug_event", crate::monitor::DebugEvent {
-        timestamp: chrono::Utc::now(),
-        component: "[AUDIO]".to_string(),
-        message,
-    });
 }
 
 /// Compare the SHA256 of `data` against a lowercase hex string.
@@ -419,95 +408,51 @@ pub async fn speak_text(
 // ── Voice input ───────────────────────────────────────────────────────────────
 
 /// Start microphone capture and STT loop.
-/// cpal::Stream is !Send on WASAPI so we keep it on a dedicated std::thread.
+/// Capture lifecycle (thread, channel, stop flag) lives in VoiceSession.
 /// Transcripts arrive as `voice_transcript` Tauri events.
 #[tauri::command]
 pub async fn start_voice_input(
-    voice_stop: State<'_, SharedVoiceStop>,
+    voice_session: State<'_, SharedVoiceSession>,
     audio_energy: State<'_, SharedAudioEnergy>,
     stt_engine: State<'_, SharedSttEngine>,
     app_handle: tauri::AppHandle,
 ) -> CmdResult<()> {
-    use std::sync::atomic::{AtomicBool, Ordering};
-
     let stt = stt_engine
         .inner()
         .lock()
         .map_err(|_| "STT engine lock poisoned".to_string())?
         .clone();
 
-    if stt.is_none() {
-        // Soft-fail: keep mic/waveform usable; transcription stays off in the STT loop.
-        crate::monitor::emit_debug_event(
-            &app_handle,
-            &crate::monitor::new_event_log(),
-            "[STT]",
-            "Host STT engine unavailable — starting mic with transcription off. \
-             Open Setup Wizard / Setup repair to restore model + vocab + ONNX Runtime.",
-        )
-        .await;
-    }
-
-    // Stop any existing recording
-    if let Ok(mut g) = voice_stop.inner().lock() {
-        if let Some(flag) = g.take() {
-            flag.store(true, Ordering::Relaxed);
+    // Stop any existing session (remount / restart safe).
+    if let Ok(mut g) = voice_session.inner().lock() {
+        if let Some(mut prev) = g.take() {
+            prev.stop();
         }
     }
 
-    let (tx, rx) = tokio::sync::mpsc::channel::<Vec<f32>>(128);
-    let stop_flag = Arc::new(AtomicBool::new(false));
-    let stop_clone = stop_flag.clone();
+    // Soft-fail diagnostics use [STT]; capture lifecycle uses [AUDIO]
+    // (see DebugEventSessionLog).
+    let log: Arc<dyn crate::audio::SessionLog> =
+        Arc::new(crate::audio::DebugEventSessionLog::new(app_handle.clone()));
 
-    // Channel to get the actual sample rate/channels back from the audio thread
-    let (cfg_tx, cfg_rx) = std::sync::mpsc::channel::<(u32, u16)>();
     let energy_arc = audio_energy.inner().clone();
-    let app_for_thread = app_handle.clone();
+    let (session, started) = crate::audio::VoiceSession::start(
+        Box::new(crate::audio::CpalCaptureBackend),
+        energy_arc,
+        log,
+        stt,
+    )
+    .map_err(|e| format!("failed to start voice session: {e}"))?;
 
-    // audio capture: stays on its own thread (cpal::Stream is !Send on WASAPI)
-    let thread_result = std::thread::Builder::new()
-        .name("audio-capture".into())
-        .spawn(move || {
-            match crate::audio::capture::AudioCapture::start(tx, energy_arc) {
-                Ok(capture) => {
-                    let sr = capture.sample_rate;
-                    let ch = capture.channels;
-                    debug_event_sync(&app_for_thread, format!(
-                        "capture started: {sr} Hz, {ch} ch — device: {}",
-                        capture.device_name
-                    ));
-                    // Send actual device config so STT loop uses the correct sample rate
-                    let _ = cfg_tx.send((sr, ch));
-                    while !stop_clone.load(Ordering::Relaxed) {
-                        std::thread::sleep(std::time::Duration::from_millis(50));
-                    }
-                    debug_event_sync(&app_for_thread, "capture stopped".to_string());
-                }
-                Err(e) => {
-                    debug_event_sync(&app_for_thread, format!("capture failed: {e}"));
-                }
-            }
-        });
-
-    if let Err(e) = thread_result {
-        return Err(format!("failed to spawn audio thread: {e}"));
+    if let Ok(mut g) = voice_session.inner().lock() {
+        *g = Some(session);
     }
-
-    // Store stop flag so stop_voice_input can signal the thread
-    if let Ok(mut g) = voice_stop.inner().lock() {
-        *g = Some(stop_flag);
-    }
-
-    // Wait briefly for the capture thread to report its actual sample rate/channels
-    let (sample_rate, channels) = cfg_rx
-        .recv_timeout(std::time::Duration::from_secs(3))
-        .unwrap_or((16000, 1));
 
     tauri::async_runtime::spawn(crate::audio::run_stt_loop(
-        rx,
-        stt,
-        sample_rate,
-        channels,
+        started.audio_rx,
+        started.stt,
+        started.sample_rate,
+        started.channels,
         app_handle,
     ));
 
@@ -523,17 +468,13 @@ pub fn get_audio_energy(energy: State<'_, SharedAudioEnergy>) -> f32 {
 
 #[tauri::command]
 pub async fn stop_voice_input(
-    voice_stop: State<'_, SharedVoiceStop>,
-    energy: State<'_, SharedAudioEnergy>,
+    voice_session: State<'_, SharedVoiceSession>,
 ) -> CmdResult<()> {
-    use std::sync::atomic::Ordering;
-    if let Ok(mut g) = voice_stop.inner().lock() {
-        if let Some(flag) = g.take() {
-            flag.store(true, Ordering::Relaxed);
+    if let Ok(mut g) = voice_session.inner().lock() {
+        if let Some(mut session) = g.take() {
+            session.stop();
         }
     }
-    // Reset energy to 0 when mic stops
-    energy.store(0u32, Ordering::Relaxed);
     Ok(())
 }
 

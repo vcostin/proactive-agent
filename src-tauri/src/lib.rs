@@ -24,8 +24,8 @@ pub type SharedConfig = Arc<RwLock<AppConfig>>;
 pub type SharedOrchestrator = Arc<Mutex<Option<Orchestrator>>>;
 pub type SharedScheduler = Arc<Mutex<ProactivityScheduler>>;
 pub type SharedChatChild = Arc<Mutex<Option<tokio::process::Child>>>;
-/// Stop signal for the voice capture thread. None = not recording.
-pub type SharedVoiceStop = Arc<std::sync::Mutex<Option<Arc<std::sync::atomic::AtomicBool>>>>;
+/// Active VoiceSession. None = not recording.
+pub type SharedVoiceSession = Arc<std::sync::Mutex<Option<audio::VoiceSession>>>;
 /// Cancels in-flight Piper playback when a new speak/preview starts (owned by PiperSpeak).
 pub type SharedPiperSpeak =
     Arc<audio::PiperSpeak<audio::PiperPlayEngine, audio::DebugEventSpeakLog>>;
@@ -71,7 +71,7 @@ pub fn run() {
             ));
             let event_log: SharedEventLog = new_event_log();
             let chat_child: SharedChatChild = Arc::new(Mutex::new(None));
-            let voice_stop: SharedVoiceStop = Arc::new(std::sync::Mutex::new(None));
+            let voice_session: SharedVoiceSession = Arc::new(std::sync::Mutex::new(None));
             let piper_speak: SharedPiperSpeak = Arc::new(audio::PiperSpeak::new(
                 models_dir,
                 audio::PiperPlayEngine,
@@ -86,7 +86,7 @@ pub fn run() {
             app.manage(scheduler.clone());
             app.manage(event_log.clone());
             app.manage(chat_child.clone());
-            app.manage(voice_stop.clone());
+            app.manage(voice_session.clone());
             app.manage(piper_speak.clone());
             app.manage(process_pids.clone());
             app.manage(audio_energy.clone());
