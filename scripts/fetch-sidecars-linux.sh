@@ -143,6 +143,14 @@ DEST_LLAMA="$LLAMA_BIN_DIR/llama-server-x86_64-unknown-linux-gnu"
 
 if [[ -x "$DEST_LLAMA" ]]; then
   echo "  OK llama-server (already present)"
+  # Do not refresh Vulkan/shared libs over an existing install — a newer
+  # release's libllama-common.so.* would keep soname links while
+  # libllama-server-impl.so stayed old, and llama-server SEGV'd on --version.
+  if [[ -f "$LLAMA_BIN_DIR/libggml-vulkan.so" || -f "$LLAMA_BIN_DIR/libggml-vulkan.so.0" ]]; then
+    echo "  OK Vulkan libs (already present)"
+  else
+    echo "  WARN: llama-server present but libggml-vulkan.so missing — re-run after removing binaries/llama/ for a matched refresh"
+  fi
 else
   CPU_URL="$(find_asset_url "$LLAMA_JSON" "$LLAMA_CPU_PAT")"
   if [[ -z "$CPU_URL" ]]; then
@@ -154,28 +162,39 @@ else
   fi
 
   download "$CPU_URL" "$TMP/llama-cpu.tar.gz"
-  extract_named "$TMP/llama-cpu.tar.gz" "llama-server" "$DEST_LLAMA"
-  echo "  OK llama-server"
-fi
-
-if [[ -n "$LLAMA_GPU_PAT" ]]; then
-  VULKAN_URL="$(find_asset_url "$LLAMA_JSON" "$LLAMA_GPU_PAT")"
-  if [[ -n "$VULKAN_URL" ]]; then
-    echo "  Downloading Vulkan backend libs..."
-    download "$VULKAN_URL" "$TMP/llama-vulkan.tar.gz"
-    mkdir -p "$TMP/llama-vulkan"
-    tar -xzf "$TMP/llama-vulkan.tar.gz" -C "$TMP/llama-vulkan"
-    find "$TMP/llama-vulkan" -type f \( -name '*.so' -o -name '*.so.*' \) \
-      -exec cp -n {} "$LLAMA_BIN_DIR/" \; 2>/dev/null || true
-    find "$TMP/llama-vulkan" \( -type l -name '*.so' -o -type l -name '*.so.*' \) \
-      -exec cp -a {} "$LLAMA_BIN_DIR/" \; 2>/dev/null || true
-    ensure_soname_links "$LLAMA_BIN_DIR"
-    SO_COUNT="$(find "$LLAMA_BIN_DIR" -maxdepth 1 \( -name '*.so' -o -name '*.so.*' \) | wc -l | tr -d ' ')"
-    echo "  OK Vulkan libs: $SO_COUNT shared objects in llama/"
-  else
-    echo "  WARN: no Ubuntu Vulkan archive — CPU inference only"
-    ensure_soname_links "$LLAMA_BIN_DIR"
+  # Full CPU archive: server binary + matching libllama* / libggml* / libmtmd*
+  mkdir -p "$TMP/llama-cpu"
+  tar -xzf "$TMP/llama-cpu.tar.gz" -C "$TMP/llama-cpu"
+  SERVER_SRC="$(find "$TMP/llama-cpu" -type f -name 'llama-server' | head -n1 || true)"
+  if [[ -z "$SERVER_SRC" ]]; then
+    echo "error: llama-server not found in CPU archive" >&2
+    exit 1
   fi
+  cp "$SERVER_SRC" "$DEST_LLAMA"
+  chmod +x "$DEST_LLAMA"
+  # Shared libs from the same archive (matched ABI)
+  find "$TMP/llama-cpu" -type f \( -name '*.so' -o -name '*.so.*' \) \
+    -exec cp {} "$LLAMA_BIN_DIR/" \;
+  find "$TMP/llama-cpu" -type l \( -name '*.so' -o -name '*.so.*' \) \
+    -exec cp -a {} "$LLAMA_BIN_DIR/" \; 2>/dev/null || true
+  echo "  OK llama-server"
+
+  if [[ -n "$LLAMA_GPU_PAT" ]]; then
+    VULKAN_URL="$(find_asset_url "$LLAMA_JSON" "$LLAMA_GPU_PAT")"
+    if [[ -n "$VULKAN_URL" ]]; then
+      echo "  Downloading Vulkan backend libs..."
+      download "$VULKAN_URL" "$TMP/llama-vulkan.tar.gz"
+      mkdir -p "$TMP/llama-vulkan"
+      tar -xzf "$TMP/llama-vulkan.tar.gz" -C "$TMP/llama-vulkan"
+      # Only the Vulkan ggml backend — never overlay libllama* from this tarball.
+      find "$TMP/llama-vulkan" -type f \( -name 'libggml-vulkan.so' -o -name 'libggml-vulkan.so.*' \) \
+        -exec cp {} "$LLAMA_BIN_DIR/" \;
+      echo "  OK Vulkan libs (libggml-vulkan only)"
+    else
+      echo "  WARN: no Ubuntu Vulkan archive — CPU inference only"
+    fi
+  fi
+  ensure_soname_links "$LLAMA_BIN_DIR"
 fi
 
 echo

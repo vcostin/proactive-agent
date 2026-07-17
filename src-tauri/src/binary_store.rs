@@ -139,22 +139,7 @@ async fn download_llama(client: &Client, app: &tauri::AppHandle) -> Result<()> {
     };
     let tag = release["tag_name"].as_str().unwrap_or("unknown").to_string();
 
-    // Step 1: GPU backend libs (Windows DLLs / Linux .so from Vulkan archive)
-    if let Some(gpu_pat) = gpu_pat {
-        if let Some(url) = find_asset(&release, gpu_pat) {
-            let label = if platform::LLAMA_IS_TARGZ { "llama-vulkan.tar.gz" } else { "llama-vulkan.zip" };
-            let data = fetch_with_progress(client, app, label, &url).await?;
-            if platform::LLAMA_IS_TARGZ {
-                extract_targz_shared_libs(&data, &llama_dir)
-                    .context("extracting Vulkan shared libs")?;
-            } else {
-                extract_zip_dlls(&data, &llama_dir)
-                    .context("extracting Vulkan DLLs")?;
-            }
-        }
-    }
-
-    // Step 2: CPU server binary (full HTTP API on Windows; primary binary everywhere)
+    // Step 1: CPU archive — server binary + matched shared libs (same build).
     let cpu_url = find_asset(&release, cpu_pat)
         .with_context(|| format!("no llama.cpp CPU asset matching '{cpu_pat}' in release {tag}"))?;
 
@@ -165,15 +150,36 @@ async fn download_llama(client: &Client, app: &tauri::AppHandle) -> Result<()> {
     let dest_name = format!("{dest_name}.exe");
 
     if platform::LLAMA_IS_TARGZ {
+        extract_targz_shared_libs(&data, &llama_dir, None)
+            .context("extracting llama CPU shared libs")?;
         extract_targz_one(&data, platform::LLAMA_EXE, &llama_dir.join(&dest_name))
             .context("extracting llama-server binary")?;
     } else {
+        extract_zip_dlls(&data, &llama_dir, None)
+            .context("extracting llama CPU DLLs")?;
         extract_zip_one(&data, platform::LLAMA_EXE, &llama_dir.join(&dest_name))
             .context("extracting llama-server binary")?;
     }
 
     #[cfg(not(target_os = "windows"))]
     make_executable(&llama_dir.join(&dest_name))?;
+
+    // Step 2: Vulkan backend only — never overlay libllama* from this archive
+    // (mismatched sonames + old server-impl → SEGV in string_format / --version).
+    if let Some(gpu_pat) = gpu_pat {
+        if let Some(url) = find_asset(&release, gpu_pat) {
+            let label = if platform::LLAMA_IS_TARGZ { "llama-vulkan.tar.gz" } else { "llama-vulkan.zip" };
+            let data = fetch_with_progress(client, app, label, &url).await?;
+            if platform::LLAMA_IS_TARGZ {
+                extract_targz_shared_libs(&data, &llama_dir, Some("libggml-vulkan"))
+                    .context("extracting Vulkan shared libs")?;
+            } else {
+                // Same rule as Linux: only the Vulkan ggml backend DLL(s).
+                extract_zip_dlls(&data, &llama_dir, Some("ggml-vulkan"))
+                    .context("extracting Vulkan DLLs")?;
+            }
+        }
+    }
 
     emit_done(app, "llama-server", &format!("installed ({tag})"));
     Ok(())
@@ -241,9 +247,9 @@ async fn download_ort(client: &Client, app: &tauri::AppHandle) -> Result<()> {
     let data = fetch_with_progress(client, app, label, &url).await?;
 
     if url.ends_with(".zip") {
-        extract_zip_dlls(&data, &ort_dir).context("extracting ONNX Runtime DLLs")?;
+        extract_zip_dlls(&data, &ort_dir, None).context("extracting ONNX Runtime DLLs")?;
     } else {
-        extract_targz_shared_libs(&data, &ort_dir)
+        extract_targz_shared_libs(&data, &ort_dir, None)
             .context("extracting ONNX Runtime shared libs")?;
     }
 
@@ -320,20 +326,30 @@ async fn fetch_with_progress(
 
 // ── Archive extraction ────────────────────────────────────────────────────────
 
-/// Extract all `.dll` files from a zip into `dest_dir`.
-fn extract_zip_dlls(data: &[u8], dest_dir: &Path) -> Result<()> {
+/// Extract `.dll` files from a zip into `dest_dir`.
+/// When `name_contains` is set, only filenames containing that substring are kept
+/// (used to avoid overlaying mismatched llama DLLs from a Vulkan-only archive).
+fn extract_zip_dlls(data: &[u8], dest_dir: &Path, name_contains: Option<&str>) -> Result<()> {
     let cursor = std::io::Cursor::new(data);
     let mut archive = zip::ZipArchive::new(cursor)?;
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i)?;
         let name = entry.name().to_lowercase();
-        if name.ends_with(".dll") {
-            let filename = Path::new(entry.name())
-                .file_name().unwrap_or_default();
-            let dest = dest_dir.join(filename);
-            let mut out = std::fs::File::create(&dest)?;
-            std::io::copy(&mut entry, &mut out)?;
+        if !name.ends_with(".dll") {
+            continue;
         }
+        let filename = Path::new(entry.name())
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        if let Some(needle) = name_contains {
+            if !filename.to_lowercase().contains(&needle.to_lowercase()) {
+                continue;
+            }
+        }
+        let dest = dest_dir.join(&filename);
+        let mut out = std::fs::File::create(&dest)?;
+        std::io::copy(&mut entry, &mut out)?;
     }
     Ok(())
 }
@@ -375,7 +391,15 @@ fn extract_targz_one(data: &[u8], name_contains: &str, dest: &Path) -> Result<()
 
 /// Extract shared libraries (`.so` / `.so.*`) from a tar.gz into `dest_dir`,
 /// then synthesise common soname symlinks (`libfoo.so.0`, `libfoo.so`).
-fn extract_targz_shared_libs(data: &[u8], dest_dir: &Path) -> Result<()> {
+///
+/// When `name_prefix` is `Some("libggml-vulkan")`, only matching basenames are
+/// extracted — used for the Vulkan backend tarball so it cannot overlay a
+/// mismatched `libllama*` ABI over an older `llama-server`.
+fn extract_targz_shared_libs(
+    data: &[u8],
+    dest_dir: &Path,
+    name_prefix: Option<&str>,
+) -> Result<()> {
     let cursor = std::io::Cursor::new(data);
     let gz = flate2::read::GzDecoder::new(cursor);
     let mut archive = tar::Archive::new(gz);
@@ -388,10 +412,16 @@ fn extract_targz_shared_libs(data: &[u8], dest_dir: &Path) -> Result<()> {
         let path = entry.path()?.into_owned();
         let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         let lower = name.to_lowercase();
-        if lower.contains(".so") {
-            let dest = dest_dir.join(&name);
-            entry.unpack(&dest)?;
+        if !lower.contains(".so") {
+            continue;
         }
+        if let Some(prefix) = name_prefix {
+            if !name.starts_with(prefix) {
+                continue;
+            }
+        }
+        let dest = dest_dir.join(&name);
+        entry.unpack(&dest)?;
     }
     ensure_soname_links(dest_dir);
     Ok(())
