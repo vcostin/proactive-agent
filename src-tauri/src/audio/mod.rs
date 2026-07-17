@@ -1,5 +1,6 @@
 #![allow(dead_code, unused_imports)]
 pub mod capture;
+pub mod piper_voice;
 pub mod stt;
 pub mod tts;
 

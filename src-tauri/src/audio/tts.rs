@@ -10,7 +10,13 @@ pub struct TtsClient;
 impl TtsClient {
     pub fn new(_port: u16) -> Self { Self }
 
-    pub async fn speak(&self, text: &str, app: &tauri::AppHandle) -> Result<()> {
+    pub async fn speak(
+        &self,
+        text: &str,
+        app: &tauri::AppHandle,
+        tts_dir: &std::path::Path,
+        voice_id: &str,
+    ) -> Result<()> {
         use crate::monitor::{emit_debug_event, new_event_log};
         // Create a throw-away log since emit_debug_event requires one — events go live via app_handle
         let dummy_log = new_event_log();
@@ -21,9 +27,26 @@ impl TtsClient {
             Ok(b) => b,
             Err(e) => { emit_debug_event(app, &dummy_log, "[AUDIO]", format!("TTS: {e}")).await; return Err(e); }
         };
-        let model = match find_tts_model() {
-            Ok(m) => m,
-            Err(e) => { emit_debug_event(app, &dummy_log, "[AUDIO]", format!("TTS: {e}")).await; return Err(e); }
+        let model = match crate::audio::piper_voice::resolve_piper_voice(tts_dir, voice_id) {
+            Ok(resolved) => {
+                if resolved.id != voice_id {
+                    emit_debug_event(
+                        app,
+                        &dummy_log,
+                        "[AUDIO]",
+                        format!(
+                            "TTS: voice '{voice_id}' unavailable — falling back to '{}'",
+                            resolved.id
+                        ),
+                    )
+                    .await;
+                }
+                resolved.onnx_path
+            }
+            Err(e) => {
+                emit_debug_event(app, &dummy_log, "[AUDIO]", format!("TTS: {e}")).await;
+                return Err(anyhow::anyhow!("{e}"));
+            }
         };
         emit_debug_event(app, &dummy_log, "[AUDIO]", format!(
             "TTS: {} chars → {}", clean.len(), binary.file_name().unwrap_or_default().to_string_lossy()
@@ -110,24 +133,6 @@ fn find_piper() -> Result<std::path::PathBuf> {
     Err(anyhow::anyhow!(
         "piper not found. Tried binaries/piper/. Open Setup repair to restore app-managed artifacts."
     ))
-}
-
-fn find_tts_model() -> Result<std::path::PathBuf> {
-    // In dev: models/tts/ next to project root; in release: relative to exe
-    let candidates = [
-        crate::binaries_dir().parent()
-            .map(|p| p.join("models").join("tts").join(crate::constants::TTS_MODEL_FILE))
-            .unwrap_or_default(),
-        crate::binaries_dir()
-            .parent().and_then(|p| p.parent())
-            .map(|p| p.join("models").join("tts").join(crate::constants::TTS_MODEL_FILE))
-            .unwrap_or_default(),
-    ];
-    candidates.into_iter()
-        .find(|p| p.exists())
-        .ok_or_else(|| anyhow::anyhow!(
-            "piper voice model not found — open Setup repair to restore app-managed artifacts"
-        ))
 }
 
 /// Strip markdown so it isn't read aloud as noise.

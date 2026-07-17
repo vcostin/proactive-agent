@@ -229,11 +229,13 @@ pub async fn download_required_models(
 
 // ── Text-to-speech output ─────────────────────────────────────────────────────
 
-/// Speak `text` through the default audio output using the sherpa-onnx TTS binary.
+/// Speak `text` through the default audio output using Piper TTS.
 /// Fire-and-forget — returns immediately, audio plays in the background.
+/// Uses the configured Piper voice id (falls back to the default when files are missing).
 #[tauri::command]
 pub async fn speak_text(
     text: String,
+    config: State<'_, SharedConfig>,
     event_log: State<'_, SharedEventLog>,
     app_handle: tauri::AppHandle,
 ) -> CmdResult<()> {
@@ -243,12 +245,17 @@ pub async fn speak_text(
         return Err(format!("text too long for TTS ({} bytes, max {MAX_TTS_BYTES})", text.len()));
     }
 
+    let (tts_dir, voice_id) = {
+        let cfg = config.read().await;
+        (cfg.models_dir.join("tts"), cfg.tts_voice_id.clone())
+    };
+
     let log = event_log.inner().clone();
     crate::monitor::emit_debug_event(&app_handle, &log, "[AUDIO]",
         format!("TTS triggered ({} chars)", text.len())).await;
     tauri::async_runtime::spawn(async move {
         let client = crate::audio::tts::TtsClient::new(0);
-        match client.speak(&text, &app_handle).await {
+        match client.speak(&text, &app_handle, &tts_dir, &voice_id).await {
             Ok(()) => { crate::monitor::emit_debug_event(&app_handle, &log, "[AUDIO]", "TTS done").await; }
             Err(e) => { crate::monitor::emit_debug_event(&app_handle, &log, "[AUDIO]", format!("TTS failed: {e}")).await; }
         }
