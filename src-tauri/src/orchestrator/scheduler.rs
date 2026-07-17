@@ -208,6 +208,16 @@ mod tests {
     }
 
     #[test]
+    fn load_missing_queue_file_yields_empty_pending() {
+        let path = temp_queue_path("missing");
+        assert!(!path.exists());
+
+        let loaded = ProactivityScheduler::load(path.clone()).expect("missing file is ok");
+        assert!(loaded.state().pending.is_empty());
+        assert!(loaded.state().last_fired.is_none());
+    }
+
+    #[test]
     fn load_then_drain_returns_overdue_and_clears_pending() {
         let path = temp_queue_path("overdue");
         let overdue = sample_msg(
