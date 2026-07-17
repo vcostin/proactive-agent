@@ -2,6 +2,7 @@
 pub mod capture;
 pub mod piper_catalog;
 pub mod piper_download;
+pub mod piper_speak;
 pub mod piper_voice;
 pub mod stt;
 pub mod tts;
@@ -17,13 +18,14 @@ pub use piper_download::{
     curated_voice_download_urls, download_curated_piper_voice, HttpVoiceFileFetcher,
     VoiceDownloadProgress, VoiceFileFetcher, PIPER_VOICES_HF_V1,
 };
+pub use piper_speak::{clean_for_speech, DebugEventSpeakLog, PiperSpeak, SpeakEngine, SpeakLog};
 pub use piper_voice::{
     piper_voice_pair_present, preview_piper_voice_request, resolve_piper_voice,
     PiperVoicePreviewRequest, ResolvedPiperVoice, DEFAULT_PIPER_VOICE_ID,
     PIPER_VOICE_PREVIEW_SAMPLE,
 };
 pub use stt::SttClient;
-pub use tts::{PlaybackGate, PlaybackToken, TtsClient};
+pub use tts::{PlaybackGate, PlaybackToken, PiperPlayEngine};
 
 use anyhow::Result;
 use tauri::Emitter;

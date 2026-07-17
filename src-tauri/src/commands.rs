@@ -11,7 +11,7 @@ use crate::monitor::{AudioState, MemoryStats, ModelInfo, SystemStatus};
 use crate::orchestrator::context::AssembledContext;
 use crate::monitor::SharedEventLog;
 use crate::{
-    SharedAudioEnergy, SharedChatChild, SharedConfig, SharedOrchestrator, SharedPlaybackGate,
+    SharedAudioEnergy, SharedChatChild, SharedConfig, SharedOrchestrator, SharedPiperSpeak,
     SharedProcessPids, SharedScheduler, SharedSttEngine, SharedVoiceStop,
 };
 
@@ -325,52 +325,54 @@ pub async fn set_tts_voice(
 #[tauri::command]
 pub async fn preview_voice(
     voice_id: String,
-    config: State<'_, SharedConfig>,
-    event_log: State<'_, SharedEventLog>,
-    playback_gate: State<'_, SharedPlaybackGate>,
+    piper_speak: State<'_, SharedPiperSpeak>,
     app_handle: tauri::AppHandle,
 ) -> CmdResult<()> {
-    let tts_dir = {
-        let cfg = config.read().await;
-        cfg.models_dir.join("tts")
-    };
-
-    if !crate::audio::piper_voice_pair_present(&tts_dir, &voice_id) {
-        download_curated_voice_emitting(&voice_id, &tts_dir, &app_handle).await?;
-    }
-
-    let preview = crate::audio::preview_piper_voice_request(&voice_id);
-    let log = event_log.inner().clone();
-    let gate = playback_gate.inner().clone();
-    let token = gate.begin();
-    crate::monitor::emit_debug_event(
-        &app_handle,
-        &log,
-        "[AUDIO]",
-        format!("TTS preview ({})", preview.voice_id),
-    )
-    .await;
+    let speak = piper_speak.inner().clone();
+    let handle = app_handle.clone();
     tauri::async_runtime::spawn(async move {
-        let client = crate::audio::tts::TtsClient::new(0);
-        match client
-            .speak(
-                &preview.text,
-                &app_handle,
-                &tts_dir,
-                &preview.voice_id,
-                gate,
-                token,
-            )
+        let fetcher = match crate::audio::HttpVoiceFileFetcher::new() {
+            Ok(f) => f,
+            Err(e) => {
+                crate::monitor::emit_debug_event(
+                    &handle,
+                    &crate::monitor::new_event_log(),
+                    "[AUDIO]",
+                    format!("TTS preview fetcher failed: {e}"),
+                )
+                .await;
+                return;
+            }
+        };
+        let progress_handle = handle.clone();
+        match speak
+            .preview(&voice_id, &fetcher, |p| {
+                let _ = progress_handle.emit(
+                    "download_progress",
+                    DownloadProgress {
+                        filename: p.filename,
+                        downloaded: p.downloaded,
+                        total: p.total,
+                        done: p.done,
+                        voice_id: Some(p.voice_id),
+                    },
+                );
+            })
             .await
         {
             Ok(()) => {
-                crate::monitor::emit_debug_event(&app_handle, &log, "[AUDIO]", "TTS preview done")
-                    .await;
+                crate::monitor::emit_debug_event(
+                    &handle,
+                    &crate::monitor::new_event_log(),
+                    "[AUDIO]",
+                    "TTS preview done",
+                )
+                .await;
             }
             Err(e) => {
                 crate::monitor::emit_debug_event(
-                    &app_handle,
-                    &log,
+                    &handle,
+                    &crate::monitor::new_event_log(),
                     "[AUDIO]",
                     format!("TTS preview failed: {e}"),
                 )
@@ -391,32 +393,25 @@ pub async fn preview_voice(
 pub async fn speak_text(
     text: String,
     config: State<'_, SharedConfig>,
-    event_log: State<'_, SharedEventLog>,
-    playback_gate: State<'_, SharedPlaybackGate>,
-    app_handle: tauri::AppHandle,
+    piper_speak: State<'_, SharedPiperSpeak>,
 ) -> CmdResult<()> {
     // Guard against unbounded piper stdin input
     const MAX_TTS_BYTES: usize = 4 * 1024;
     if text.len() > MAX_TTS_BYTES {
-        return Err(format!("text too long for TTS ({} bytes, max {MAX_TTS_BYTES})", text.len()));
+        return Err(format!(
+            "text too long for TTS ({} bytes, max {MAX_TTS_BYTES})",
+            text.len()
+        ));
     }
 
-    let (tts_dir, voice_id) = {
+    let voice_id = {
         let cfg = config.read().await;
-        (cfg.models_dir.join("tts"), cfg.tts_voice_id.clone())
+        cfg.tts_voice_id.clone()
     };
 
-    let log = event_log.inner().clone();
-    let gate = playback_gate.inner().clone();
-    let token = gate.begin();
-    crate::monitor::emit_debug_event(&app_handle, &log, "[AUDIO]",
-        format!("TTS triggered ({} chars)", text.len())).await;
+    let speak = piper_speak.inner().clone();
     tauri::async_runtime::spawn(async move {
-        let client = crate::audio::tts::TtsClient::new(0);
-        match client.speak(&text, &app_handle, &tts_dir, &voice_id, gate, token).await {
-            Ok(()) => { crate::monitor::emit_debug_event(&app_handle, &log, "[AUDIO]", "TTS done").await; }
-            Err(e) => { crate::monitor::emit_debug_event(&app_handle, &log, "[AUDIO]", format!("TTS failed: {e}")).await; }
-        }
+        let _ = speak.speak(&text, &voice_id).await;
     });
     Ok(())
 }
