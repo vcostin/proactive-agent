@@ -28,6 +28,8 @@ export interface DownloadProgress {
   downloaded: number;
   total: number;
   done: boolean;
+  /** Set for curated Piper voice downloads. */
+  voice_id?: string;
 }
 
 export interface PrerequisiteCheck {

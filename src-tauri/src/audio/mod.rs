@@ -1,6 +1,7 @@
 #![allow(dead_code, unused_imports)]
 pub mod capture;
 pub mod piper_catalog;
+pub mod piper_download;
 pub mod piper_voice;
 pub mod stt;
 pub mod tts;
@@ -10,6 +11,10 @@ pub use capture::{
     resolve_output_device, AudioCapture,
 };
 pub use piper_catalog::{list_curated_piper_voices, CuratedPiperVoice};
+pub use piper_download::{
+    curated_voice_download_urls, download_curated_piper_voice, HttpVoiceFileFetcher,
+    VoiceDownloadProgress, VoiceFileFetcher, PIPER_VOICES_HF_V1,
+};
 pub use stt::SttClient;
 pub use tts::TtsClient;
 

@@ -58,6 +58,9 @@ pub struct DownloadProgress {
     pub downloaded: u64,
     pub total: u64,
     pub done: bool,
+    /// Set for curated Piper voice downloads; absent for wizard/binary fetches.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub voice_id: Option<String>,
 }
 
 /// Returns current setup state — drives first-run Setup Wizard and Setup repair.
@@ -180,6 +183,7 @@ pub async fn download_required_models(
                     downloaded: len,
                     total: len,
                     done: true,
+                    voice_id: None,
                 },
             );
             continue;
@@ -207,6 +211,7 @@ pub async fn download_required_models(
                     downloaded,
                     total,
                     done: false,
+                    voice_id: None,
                 },
             );
         }
@@ -220,11 +225,45 @@ pub async fn download_required_models(
                 downloaded,
                 total,
                 done: true,
+                voice_id: None,
             },
         );
     }
 
     Ok(())
+}
+
+/// Download a curated Piper voice (onnx + json) into `models/tts/`.
+/// Emits `download_progress` while fetching. Does not change `tts_voice_id`.
+#[tauri::command]
+pub async fn download_curated_voice(
+    voice_id: String,
+    config: State<'_, SharedConfig>,
+    app_handle: tauri::AppHandle,
+) -> CmdResult<()> {
+    let tts_dir = {
+        let cfg = config.read().await;
+        cfg.models_dir.join("tts")
+    };
+
+    let handle = app_handle.clone();
+    tokio::task::spawn_blocking(move || {
+        let fetcher = crate::audio::HttpVoiceFileFetcher::new()?;
+        crate::audio::download_curated_piper_voice(&voice_id, &tts_dir, &fetcher, |p| {
+            let _ = handle.emit(
+                "download_progress",
+                DownloadProgress {
+                    filename: p.filename,
+                    downloaded: p.downloaded,
+                    total: p.total,
+                    done: p.done,
+                    voice_id: Some(p.voice_id),
+                },
+            );
+        })
+    })
+    .await
+    .map_err(|e| format!("download task join: {e}"))?
 }
 
 // ── Text-to-speech output ─────────────────────────────────────────────────────
@@ -582,6 +621,7 @@ pub async fn install_vcredist(app_handle: tauri::AppHandle) -> CmdResult<()> {
             downloaded,
             total,
             done: false,
+            voice_id: None,
         });
     }
     drop(file);
@@ -608,6 +648,7 @@ pub async fn install_vcredist(app_handle: tauri::AppHandle) -> CmdResult<()> {
         downloaded,
         total,
         done: true,
+        voice_id: None,
     });
 
     // Exit code 0 = success, 3010 = success + reboot suggested (not required)

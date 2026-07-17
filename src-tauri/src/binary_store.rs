@@ -313,6 +313,7 @@ async fn fetch_with_progress(
             downloaded,
             total,
             done: false,
+            voice_id: None,
         });
     }
     let _ = app.emit("download_progress", DownloadProgress {
@@ -320,6 +321,7 @@ async fn fetch_with_progress(
         downloaded,
         total,
         done: true,
+        voice_id: None,
     });
     Ok(buf)
 }
@@ -548,5 +550,6 @@ fn emit_done(app: &tauri::AppHandle, label: &str, msg: &str) {
         downloaded: 1,
         total: 1,
         done: true,
+        voice_id: None,
     });
 }

@@ -4,9 +4,13 @@
 
 **Blocked by:** 11 — Curated catalog + installed detection
 
-**Status:** ready-for-agent
+**Status:** ready-for-human
 
-- [ ] Download fetches both `.onnx` and `.onnx.json` for a curated id
-- [ ] In-progress and failure states are visible; failure does not corrupt selected voice id
-- [ ] After success, catalog reports the voice as installed
-- [ ] Setup Wizard stays default-voice-only (no full curated wizard steps)
+- [x] Download fetches both `.onnx` and `.onnx.json` for a curated id
+- [x] In-progress and failure states are visible; failure does not corrupt selected voice id
+- [x] After success, catalog reports the voice as installed
+- [x] Setup Wizard stays default-voice-only (no full curated wizard steps)
+
+## Comments
+
+Implemented: `download_curated_piper_voice` + `HttpVoiceFileFetcher` in `audio/piper_download.rs`; curated `hf_stem` metadata; Tauri `download_curated_voice` emits `download_progress` and does not mutate `tts_voice_id`. Seam tests cover success, failed json (no orphan onnx), unknown id, and wizard catalog default-only.

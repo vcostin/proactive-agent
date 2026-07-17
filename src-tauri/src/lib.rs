@@ -194,6 +194,7 @@ pub fn run() {
             #[cfg(debug_assertions)] commands::open_llama_diagnostic,
             commands::pick_model_file,
             commands::download_required_models,
+            commands::download_curated_voice,
             commands::send_message,
             commands::swap_model,
             commands::clear_model,

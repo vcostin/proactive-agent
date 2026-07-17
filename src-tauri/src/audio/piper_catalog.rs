@@ -8,11 +8,14 @@ use std::path::Path;
 
 use super::piper_voice::piper_voice_pair_present;
 
-/// Static curated entry (id / label / locale) for the locked P0 shortlist.
+/// Static curated entry (id / label / locale / HF path stem) for the locked P0 shortlist.
 struct CuratedMeta {
     id: &'static str,
     label: &'static str,
     locale: &'static str,
+    /// Path under `rhasspy/piper-voices` `v1.0.0` without file extension.
+    /// e.g. `en/en_US/joe/medium/en_US-joe-medium`
+    hf_stem: &'static str,
 }
 
 /// Locked P0 Piper shortlist — order is the picker order.
@@ -21,31 +24,37 @@ const CURATED: &[CuratedMeta] = &[
         id: "en_US-lessac-medium",
         label: "Lessac",
         locale: "en_US",
+        hf_stem: "en/en_US/lessac/medium/en_US-lessac-medium",
     },
     CuratedMeta {
         id: "en_US-joe-medium",
         label: "Joe",
         locale: "en_US",
+        hf_stem: "en/en_US/joe/medium/en_US-joe-medium",
     },
     CuratedMeta {
         id: "en_US-kristin-medium",
         label: "Kristin",
         locale: "en_US",
+        hf_stem: "en/en_US/kristin/medium/en_US-kristin-medium",
     },
     CuratedMeta {
         id: "en_US-bryce-medium",
         label: "Bryce",
         locale: "en_US",
+        hf_stem: "en/en_US/bryce/medium/en_US-bryce-medium",
     },
     CuratedMeta {
         id: "en_US-sam-medium",
         label: "Sam",
         locale: "en_US",
+        hf_stem: "en/en_US/sam/medium/en_US-sam-medium",
     },
     CuratedMeta {
         id: "en_GB-cori-medium",
         label: "Cori",
         locale: "en_GB",
+        hf_stem: "en/en_GB/cori/medium/en_GB-cori-medium",
     },
 ];
 
@@ -69,6 +78,16 @@ pub fn list_curated_piper_voices(tts_dir: &Path) -> Vec<CuratedPiperVoice> {
             installed: piper_voice_pair_present(tts_dir, meta.id),
         })
         .collect()
+}
+
+/// Whether `id` is on the locked P0 curated shortlist.
+pub fn is_curated_piper_voice_id(id: &str) -> bool {
+    CURATED.iter().any(|m| m.id == id)
+}
+
+/// Hugging Face path stem for a curated id (no extension), if curated.
+pub fn curated_voice_hf_stem(id: &str) -> Option<&'static str> {
+    CURATED.iter().find(|m| m.id == id).map(|m| m.hf_stem)
 }
 
 #[cfg(test)]
