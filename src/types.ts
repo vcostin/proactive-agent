@@ -9,7 +9,7 @@ export interface BinariesStatus {
 }
 
 export interface SetupStatus {
-  /** Core agent ready: chat model + llama. Piper is not required. */
+  /** Core agent ready: chat model + required_for_core catalog. Piper is not required. */
   ready: boolean;
   chat_model: string;
   embed_model_ready: boolean;
@@ -17,7 +17,7 @@ export interface SetupStatus {
   stt_model_ready: boolean;
   /** Vocabulary file present */
   stt_vocab_ready: boolean;
-  /** Host STT path: model + vocab + ONNX Runtime lib */
+  /** Host STT path: required_for_stt catalog artifacts (encoder + decoder + vocab + ORT) */
   stt_ready: boolean;
   data_dir: string;
   binaries: BinariesStatus;

@@ -1,52 +1,38 @@
 //! Setup status evaluation at the Rust command seam.
 //!
-//! Core agent readiness = chat model present + llama-server ready.
-//! Piper/TTS is reported but never required for main UI.
-//! Host STT readiness = encoder + decoder + vocab + ONNX Runtime lib.
+//! Core / Host STT readiness derives from Platform `verify_catalog` plus
+//! `required_for_core` / `required_for_stt`. Chat model presence remains part of
+//! Core ready. Piper/TTS is reported but never required for the Host completion bar.
 
 use std::path::{Path, PathBuf};
 
 use crate::binary_store::BinariesStatus;
 use crate::constants;
+use crate::platform::{verify_catalog, ArtifactDef, LayoutRoots, VerifyStatus};
 use crate::sidecar_filename;
-
-/// Fixture-friendly snapshot of what the setup seam observes on disk.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SetupProbe {
-    pub chat_model_present: bool,
-    pub llama_ready: bool,
-    pub piper_ready: bool,
-    pub ort_lib_ready: bool,
-    pub embed_model_ready: bool,
-    /// Encoder + decoder ONNX present.
-    pub stt_model_ready: bool,
-    pub stt_vocab_ready: bool,
-}
-
-/// Core agent can reach the main UI: chat model + inference sidecar.
-/// Piper/TTS is intentionally excluded from this Host completion bar.
-pub fn core_agent_ready(probe: &SetupProbe) -> bool {
-    probe.chat_model_present && probe.llama_ready
-}
-
-/// Host STT path (mic → text) app-managed pieces are all present.
-pub fn host_stt_ready(probe: &SetupProbe) -> bool {
-    probe.stt_model_ready && probe.stt_vocab_ready && probe.ort_lib_ready
-}
-
-/// Probe sidecar / ORT readiness under an arbitrary binaries root (fixture tests).
-pub fn check_binaries_in(binaries_root: &Path) -> BinariesStatus {
-    BinariesStatus {
-        llama_ready: find_sidecar_in(binaries_root, "llama-server").is_some(),
-        piper_ready: find_sidecar_in(binaries_root, "piper").is_some(),
-        ort_ready: ort_lib_ready_in(binaries_root),
-        ort_note: ort_note(),
-    }
-}
 
 fn ort_note() -> String {
     "Host STT path: app-managed ONNX Runtime library under binaries/ort/ (repair via Setup Wizard)."
         .into()
+}
+
+fn ready_by_id(statuses: &[VerifyStatus], id: &str) -> bool {
+    statuses
+        .iter()
+        .find(|s| s.id == id)
+        .map(|s| s.ready)
+        .unwrap_or(false)
+}
+
+fn required_all_ready(
+    artifacts: &[ArtifactDef],
+    statuses: &[VerifyStatus],
+    required: impl Fn(&ArtifactDef) -> bool,
+) -> bool {
+    artifacts
+        .iter()
+        .filter(|a| required(a))
+        .all(|a| ready_by_id(statuses, a.id))
 }
 
 /// Locate a sidecar under `binaries_root` using the same layout rules as production.
@@ -100,28 +86,29 @@ pub fn embed_model_ready_in(models_dir: &Path) -> bool {
     models_dir.join(constants::EMBED_MODEL_FILE).exists()
 }
 
-/// Build the full setup probe from fixture (or live) directories.
-pub fn probe_layout(
-    binaries_root: &Path,
-    models_dir: &Path,
-    chat_model: &Path,
-) -> SetupProbe {
-    let binaries = check_binaries_in(binaries_root);
-    SetupProbe {
-        chat_model_present: !chat_model.as_os_str().is_empty() && chat_model.exists(),
-        llama_ready: binaries.llama_ready,
-        piper_ready: binaries.piper_ready,
-        ort_lib_ready: binaries.ort_ready,
-        embed_model_ready: embed_model_ready_in(models_dir),
-        stt_model_ready: stt_model_ready_in(binaries_root),
-        stt_vocab_ready: stt_vocab_ready_in(binaries_root),
+fn binaries_from_verify(statuses: &[VerifyStatus]) -> BinariesStatus {
+    BinariesStatus {
+        llama_ready: ready_by_id(statuses, "llama-server"),
+        piper_ready: ready_by_id(statuses, "piper"),
+        ort_ready: ready_by_id(statuses, "onnxruntime"),
+        ort_note: ort_note(),
     }
+}
+
+/// Probe sidecar / ORT readiness under an arbitrary binaries root via catalog verify.
+pub fn check_binaries_in(binaries_root: &Path) -> BinariesStatus {
+    let roots = LayoutRoots {
+        binaries: binaries_root.to_path_buf(),
+        models: PathBuf::new(),
+    };
+    let statuses = verify_catalog(crate::platform::current_module().artifacts(), &roots);
+    binaries_from_verify(&statuses)
 }
 
 /// Serialize-ready status payload shared with the frontend / Setup Wizard.
 #[derive(serde::Serialize, Clone)]
 pub struct SetupStatus {
-    /// Core agent ready for main UI (chat model + llama). Not gated on Piper.
+    /// Core agent ready for main UI (chat model + required_for_core catalog). Not gated on Piper.
     pub ready: bool,
     pub chat_model: String,
     pub embed_model_ready: bool,
@@ -129,36 +116,68 @@ pub struct SetupStatus {
     pub stt_model_ready: bool,
     /// Vocabulary file present.
     pub stt_vocab_ready: bool,
-    /// Host STT path ready: model files + vocab + ONNX Runtime lib.
+    /// Host STT path ready: all required_for_stt catalog artifacts verify.
     pub stt_ready: bool,
     pub data_dir: String,
     pub binaries: BinariesStatus,
 }
 
+/// Derive SetupStatus from Platform catalog verify + required_for_* (+ chat model for Core).
+///
+/// This is the Platform readiness seam: same layout roots + catalog → one ready answer.
+pub fn derive_setup_status(
+    artifacts: &[ArtifactDef],
+    roots: &LayoutRoots,
+    chat_model: &str,
+    data_dir: String,
+) -> SetupStatus {
+    let chat_path = Path::new(chat_model);
+    let chat_model_present = !chat_model.is_empty() && chat_path.exists();
+    let statuses = verify_catalog(artifacts, roots);
+
+    let core_artifacts_ready =
+        required_all_ready(artifacts, &statuses, |a| a.required_for_core);
+    let stt_ready = required_all_ready(artifacts, &statuses, |a| a.required_for_stt);
+
+    let encoder = ready_by_id(&statuses, "stt-encoder");
+    let decoder = ready_by_id(&statuses, "stt-decoder");
+
+    SetupStatus {
+        ready: chat_model_present && core_artifacts_ready,
+        chat_model: chat_model.to_string(),
+        embed_model_ready: ready_by_id(&statuses, "embed-model"),
+        stt_model_ready: encoder && decoder,
+        stt_vocab_ready: ready_by_id(&statuses, "stt-vocab"),
+        stt_ready,
+        data_dir,
+        binaries: binaries_from_verify(&statuses),
+    }
+}
+
+/// Production adapter: current Platform catalog + layout roots → SetupStatus.
 pub fn build_setup_status(
     chat_model: &str,
     models_dir: &Path,
     binaries_root: &Path,
     data_dir: String,
 ) -> SetupStatus {
-    let chat_path = Path::new(chat_model);
-    let probe = probe_layout(binaries_root, models_dir, chat_path);
-    let binaries = check_binaries_in(binaries_root);
-    SetupStatus {
-        ready: core_agent_ready(&probe),
-        chat_model: chat_model.to_string(),
-        embed_model_ready: probe.embed_model_ready,
-        stt_model_ready: probe.stt_model_ready,
-        stt_vocab_ready: probe.stt_vocab_ready,
-        stt_ready: host_stt_ready(&probe),
+    derive_setup_status(
+        crate::platform::current_module().artifacts(),
+        &LayoutRoots {
+            binaries: binaries_root.to_path_buf(),
+            models: models_dir.to_path_buf(),
+        },
+        chat_model,
         data_dir,
-        binaries,
-    }
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::platform::{
+        linux, macos, windows, ArtifactKind, ArtifactRoot, ArtifactSource, VerifyRule,
+    };
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -206,57 +225,222 @@ mod tests {
         );
     }
 
-    #[test]
-    fn core_agent_ready_requires_chat_model_and_llama_not_piper() {
-        let base = SetupProbe {
-            chat_model_present: true,
-            llama_ready: true,
-            piper_ready: false,
-            ort_lib_ready: false,
-            embed_model_ready: false,
-            stt_model_ready: false,
-            stt_vocab_ready: false,
-        };
-        assert!(core_agent_ready(&base));
-        assert!(!core_agent_ready(&SetupProbe {
-            chat_model_present: false,
-            ..base.clone()
-        }));
-        assert!(!core_agent_ready(&SetupProbe {
-            llama_ready: false,
-            ..base
-        }));
+    /// Minimal catalog whose required flags differ from Host naming — proves gates follow flags.
+    fn flag_driven_catalog() -> Vec<ArtifactDef> {
+        vec![
+            ArtifactDef {
+                id: "core-bin",
+                kind: ArtifactKind::Sidecar,
+                root: ArtifactRoot::Binaries,
+                relative_dir: "",
+                filename: "llama-server",
+                sidecar_name: true,
+                source: ArtifactSource::Manual,
+                verify: VerifyRule::SidecarUsable,
+                required_for_core: true,
+                required_for_stt: false,
+            },
+            ArtifactDef {
+                id: "optional-tts",
+                kind: ArtifactKind::Sidecar,
+                root: ArtifactRoot::Binaries,
+                relative_dir: "",
+                filename: "piper",
+                sidecar_name: true,
+                source: ArtifactSource::Manual,
+                verify: VerifyRule::SidecarUsable,
+                required_for_core: false,
+                required_for_stt: false,
+            },
+            ArtifactDef {
+                id: "stt-piece-a",
+                kind: ArtifactKind::Data,
+                root: ArtifactRoot::Binaries,
+                relative_dir: "flag-stt",
+                filename: "a.bin",
+                sidecar_name: false,
+                source: ArtifactSource::Manual,
+                verify: VerifyRule::Exists,
+                required_for_core: false,
+                required_for_stt: true,
+            },
+            ArtifactDef {
+                id: "stt-piece-b",
+                kind: ArtifactKind::Data,
+                root: ArtifactRoot::Binaries,
+                relative_dir: "flag-stt",
+                filename: "b.bin",
+                sidecar_name: false,
+                source: ArtifactSource::Manual,
+                verify: VerifyRule::Exists,
+                required_for_core: false,
+                required_for_stt: true,
+            },
+        ]
     }
 
     #[test]
-    fn host_stt_ready_requires_model_vocab_and_ort_not_launcher() {
-        let base = SetupProbe {
-            chat_model_present: true,
-            llama_ready: true,
-            piper_ready: true,
-            ort_lib_ready: true,
-            embed_model_ready: true,
-            stt_model_ready: true,
-            stt_vocab_ready: true,
+    fn derived_gates_follow_required_for_flags_not_optional_rows() {
+        let root = unique_temp("flags");
+        let binaries = root.join("binaries");
+        let models = root.join("models");
+        let chat = models.join("chat.gguf");
+        write_sidecar(&binaries, "llama-server");
+        write_file(&chat, 128);
+        write_file(&binaries.join("flag-stt").join("a.bin"), 8);
+        write_file(&binaries.join("flag-stt").join("b.bin"), 8);
+        // optional-tts deliberately missing
+
+        let catalog = flag_driven_catalog();
+        let roots = LayoutRoots {
+            binaries: binaries.clone(),
+            models: models.clone(),
         };
-        assert!(host_stt_ready(&base));
-        assert!(!host_stt_ready(&SetupProbe {
-            stt_model_ready: false,
-            ..base.clone()
-        }));
-        assert!(!host_stt_ready(&SetupProbe {
-            stt_vocab_ready: false,
-            ..base.clone()
-        }));
-        assert!(!host_stt_ready(&SetupProbe {
-            ort_lib_ready: false,
-            ..base
-        }));
+        let status = derive_setup_status(
+            &catalog,
+            &roots,
+            chat.to_str().unwrap(),
+            root.to_string_lossy().into(),
+        );
+
+        assert!(status.ready, "core-bin + chat; optional-tts must not gate Core");
+        assert!(status.stt_ready, "both required_for_stt pieces present");
+
+        fs::remove_file(binaries.join("flag-stt").join("b.bin")).unwrap();
+        let status = derive_setup_status(
+            &catalog,
+            &roots,
+            chat.to_str().unwrap(),
+            root.to_string_lossy().into(),
+        );
+        assert!(status.ready);
+        assert!(
+            !status.stt_ready,
+            "removing one required_for_stt artifact must clear Host STT ready"
+        );
+
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
-    fn fixture_status_allows_main_ui_without_piper() {
-        let root = unique_temp("gate");
+    fn derived_core_requires_chat_model_even_when_catalog_core_ready() {
+        let root = unique_temp("no-chat");
+        let binaries = root.join("binaries");
+        let models = root.join("models");
+        write_sidecar(&binaries, "llama-server");
+        write_file(&binaries.join("flag-stt").join("a.bin"), 8);
+        write_file(&binaries.join("flag-stt").join("b.bin"), 8);
+
+        let status = derive_setup_status(
+            &flag_driven_catalog(),
+            &LayoutRoots {
+                binaries,
+                models: models.clone(),
+            },
+            "",
+            root.to_string_lossy().into(),
+        );
+        assert!(!status.ready);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn host_catalog_stt_ready_means_encoder_decoder_vocab_and_ort() {
+        let root = unique_temp("host-stt");
+        let binaries = root.join("binaries");
+        let models = root.join("models");
+        let chat = models.join("chat.gguf");
+        write_sidecar(&binaries, "llama-server");
+        write_file(&chat, 128);
+        write_stt_artifacts(&binaries);
+
+        let roots = LayoutRoots {
+            binaries: binaries.clone(),
+            models: models.clone(),
+        };
+        let status = derive_setup_status(
+            linux::ARTIFACTS,
+            &roots,
+            chat.to_str().unwrap(),
+            root.to_string_lossy().into(),
+        );
+
+        assert!(status.ready);
+        assert!(status.stt_model_ready);
+        assert!(status.stt_vocab_ready);
+        assert!(status.binaries.ort_ready);
+        assert!(status.stt_ready);
+        assert!(!status.binaries.piper_ready, "piper stays out of Core gate");
+        assert!(
+            find_sidecar_in(&binaries, "parakeet-server").is_none(),
+            "no Parakeet HTTP sidecar; Host STT ready must not require it"
+        );
+
+        // Remove vocab only — Host STT not ready; Core unchanged.
+        fs::remove_file(
+            binaries
+                .join(constants::STT_MODEL_REL_DIR)
+                .join(constants::STT_VOCAB_FILE),
+        )
+        .unwrap();
+        let status = derive_setup_status(
+            linux::ARTIFACTS,
+            &roots,
+            chat.to_str().unwrap(),
+            root.to_string_lossy().into(),
+        );
+        assert!(status.ready);
+        assert!(!status.stt_ready);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn host_catalog_non_required_rows_do_not_gate_core() {
+        let root = unique_temp("core-only");
+        let binaries = root.join("binaries");
+        let models = root.join("models");
+        let chat = models.join("chat.gguf");
+        write_sidecar(&binaries, "llama-server");
+        write_file(&chat, 128);
+        // No piper, vulkan libs, tts-voice, embed, or STT — Core still ready.
+
+        let status = derive_setup_status(
+            linux::ARTIFACTS,
+            &LayoutRoots { binaries, models },
+            chat.to_str().unwrap(),
+            root.to_string_lossy().into(),
+        );
+        assert!(status.ready);
+        assert!(!status.stt_ready);
+        assert!(!status.binaries.piper_ready);
+        assert!(!status.embed_model_ready);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn guest_catalogs_use_same_derivation_pattern() {
+        let root = unique_temp("guest");
+        let binaries = root.join("binaries");
+        let models = root.join("models");
+        fs::create_dir_all(&binaries).unwrap();
+        fs::create_dir_all(&models).unwrap();
+        let roots = LayoutRoots { binaries, models };
+
+        for artifacts in [windows::ARTIFACTS, macos::ARTIFACTS] {
+            let status = derive_setup_status(artifacts, &roots, "", root.to_string_lossy().into());
+            assert!(!status.ready);
+            assert!(!status.stt_ready);
+        }
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn build_setup_status_uses_current_catalog_derivation() {
+        let root = unique_temp("build");
         let binaries = root.join("binaries");
         let models = root.join("models");
         let chat = models.join("chat.gguf");
@@ -269,24 +453,9 @@ mod tests {
             &binaries,
             root.to_string_lossy().into(),
         );
-
-        assert!(status.ready, "Core agent ready without piper");
-        assert!(status.binaries.llama_ready);
+        assert!(status.ready);
         assert!(!status.binaries.piper_ready);
         assert!(!status.stt_ready);
-
-        let _ = fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn fixture_status_reports_absent_chat_model_as_not_ready() {
-        let root = unique_temp("no-chat");
-        let binaries = root.join("binaries");
-        let models = root.join("models");
-        write_sidecar(&binaries, "llama-server");
-
-        let status = build_setup_status("", &models, &binaries, root.to_string_lossy().into());
-        assert!(!status.ready);
 
         let _ = fs::remove_dir_all(&root);
     }
@@ -308,39 +477,6 @@ mod tests {
         );
         assert!(!status.ready);
         assert!(!status.binaries.llama_ready);
-
-        let _ = fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn fixture_status_surfaces_stt_distinctly_from_core() {
-        let root = unique_temp("stt");
-        let binaries = root.join("binaries");
-        let models = root.join("models");
-        let chat = models.join("chat.gguf");
-        write_sidecar(&binaries, "llama-server");
-        write_file(&chat, 128);
-        write_stt_artifacts(&binaries);
-
-        let status = build_setup_status(
-            chat.to_str().unwrap(),
-            &models,
-            &binaries,
-            root.to_string_lossy().into(),
-        );
-
-        assert!(status.ready);
-        assert!(status.stt_model_ready);
-        assert!(status.stt_vocab_ready);
-        assert!(status.binaries.ort_ready);
-        assert!(status.stt_ready);
-        // Piper still optional for Core agent
-        assert!(!status.binaries.piper_ready);
-        // Launcher absence must not block Host STT ready
-        assert!(
-            find_sidecar_in(&binaries, "parakeet-server").is_none(),
-            "fixture has no launcher; ready must not require it"
-        );
 
         let _ = fs::remove_dir_all(&root);
     }
