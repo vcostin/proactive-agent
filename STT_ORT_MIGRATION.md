@@ -189,7 +189,7 @@ Merge / sidecar delete on Host OS is gated by ADR 0001:
 - [x] Host STT ready = model + vocab + ONNX Runtime lib (app-managed); launcher removed from catalog/ready
 - [x] Soft-fail path: Core agent up; maximum Host-debuggable diagnostics
 - [x] Cleanup: no `parakeet-server` / `:5092` / SidecarHealth parakeet row / wizard launcher row
-- [ ] Manual Host mic smoke (necessary, not sufficient)
+- [x] Manual Host mic smoke (necessary, not sufficient)
 
 Out of this iteration: TTS, GPU offload slider, wizard mic sample-rate UX, decoder biasing / face-space quality, Guest OS STT parity.
 

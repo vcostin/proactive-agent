@@ -1,0 +1,22 @@
+{
+  "model": "parakeet-tdt-0.6b-v3-int8",
+  "decode": "greedy_tdt",
+  "boosting": false,
+  "recorded": "2026-07-17",
+  "clips": [
+    {
+      "id": "face",
+      "pcm": "face_16k.f32",
+      "wav": "face.wav",
+      "intended": "face",
+      "observed_greedy": ""
+    },
+    {
+      "id": "space",
+      "pcm": "space_16k.f32",
+      "wav": "space.wav",
+      "intended": "space",
+      "observed_greedy": "Space."
+    }
+  ]
+}
