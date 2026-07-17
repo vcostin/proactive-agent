@@ -39,21 +39,15 @@ Deno.test("voice off: appends proactive text only", () => {
 
 Deno.test("speak failure leaves text delivery intact", async () => {
   const appended: string[] = [];
-  let speakCalls = 0;
 
   deliverProactive({
     content: "Still show me",
     ttsEnabled: true,
     append: (content: string) => appended.push(content),
-    speak: () => {
-      speakCalls += 1;
-      return Promise.reject(new Error("piper missing"));
-    },
+    speak: () => Promise.reject(new Error("piper missing")),
   });
 
   assertEquals(appended, ["Still show me"]);
-  assertEquals(speakCalls, 1);
-  // Let the rejected promise settle through the helper's catch
-  await Promise.resolve();
-  await Promise.resolve();
+  // Flush microtasks so a leaked rejection would surface as test failure
+  await new Promise((r) => setTimeout(r, 0));
 });

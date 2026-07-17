@@ -114,11 +114,7 @@ export function useChat() {
           return next;
         });
       },
-      speak: (text) =>
-        invoke('speak_text', { text }).catch(e => {
-          console.error('[TTS] proactive speak failed:', e);
-          throw e;
-        }),
+      speak: (text) => invoke('speak_text', { text }),
     });
   }, []);
 

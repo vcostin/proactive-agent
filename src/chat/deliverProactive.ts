@@ -14,8 +14,8 @@ export function deliverProactive({
 }: DeliverProactiveArgs): void {
   append(content);
   if (ttsEnabled && content.trim()) {
-    void Promise.resolve(speak(content)).catch(() => {
-      /* TTS failure must not affect text delivery */
+    void Promise.resolve(speak(content)).catch((err) => {
+      console.error('[TTS] proactive speak failed:', err);
     });
   }
 }
