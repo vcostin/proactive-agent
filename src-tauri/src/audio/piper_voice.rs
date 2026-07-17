@@ -35,20 +35,24 @@ pub fn resolve_piper_voice(
     ))
 }
 
-fn try_resolve(tts_dir: &Path, id: &str) -> Option<ResolvedPiperVoice> {
+/// Whether both `{id}.onnx` and `{id}.onnx.json` exist under `tts_dir`.
+pub fn piper_voice_pair_present(tts_dir: &Path, id: &str) -> bool {
     if id.is_empty() {
-        return None;
+        return false;
     }
     let onnx_path = tts_dir.join(format!("{id}.onnx"));
     let json_path = tts_dir.join(format!("{id}.onnx.json"));
-    if onnx_path.is_file() && json_path.is_file() {
-        Some(ResolvedPiperVoice {
-            id: id.to_string(),
-            onnx_path,
-        })
-    } else {
-        None
+    onnx_path.is_file() && json_path.is_file()
+}
+
+fn try_resolve(tts_dir: &Path, id: &str) -> Option<ResolvedPiperVoice> {
+    if !piper_voice_pair_present(tts_dir, id) {
+        return None;
     }
+    Some(ResolvedPiperVoice {
+        id: id.to_string(),
+        onnx_path: tts_dir.join(format!("{id}.onnx")),
+    })
 }
 
 #[cfg(test)]
