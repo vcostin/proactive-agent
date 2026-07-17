@@ -11,25 +11,14 @@ use crate::monitor::{AudioState, MemoryStats, ModelInfo, SystemStatus};
 use crate::orchestrator::context::AssembledContext;
 use crate::monitor::SharedEventLog;
 use crate::{
-    SharedAudioEnergy, SharedChatChild, SharedConfig, SharedOrchestrator, SharedPlaybackGate,
-    SharedProcessPids, SharedScheduler, SharedSttEngine, SharedVoiceStop,
+    SharedAudioEnergy, SharedChatChild, SharedConfig, SharedOrchestrator, SharedPiperSpeak,
+    SharedProcessPids, SharedScheduler, SharedSttEngine, SharedVoiceSession,
 };
 
 type CmdResult<T> = Result<T, String>;
 
 fn to_cmd_err(e: impl std::fmt::Display) -> String {
     e.to_string()
-}
-
-/// Emit a debug event from a synchronous context (e.g. std::thread).
-/// AppHandle::emit is sync so this works without an async runtime.
-fn debug_event_sync(app: &tauri::AppHandle, message: String) {
-    use tauri::Emitter;
-    let _ = app.emit("debug_event", crate::monitor::DebugEvent {
-        timestamp: chrono::Utc::now(),
-        component: "[AUDIO]".to_string(),
-        message,
-    });
 }
 
 /// Compare the SHA256 of `data` against a lowercase hex string.
@@ -325,52 +314,54 @@ pub async fn set_tts_voice(
 #[tauri::command]
 pub async fn preview_voice(
     voice_id: String,
-    config: State<'_, SharedConfig>,
-    event_log: State<'_, SharedEventLog>,
-    playback_gate: State<'_, SharedPlaybackGate>,
+    piper_speak: State<'_, SharedPiperSpeak>,
     app_handle: tauri::AppHandle,
 ) -> CmdResult<()> {
-    let tts_dir = {
-        let cfg = config.read().await;
-        cfg.models_dir.join("tts")
-    };
-
-    if !crate::audio::piper_voice_pair_present(&tts_dir, &voice_id) {
-        download_curated_voice_emitting(&voice_id, &tts_dir, &app_handle).await?;
-    }
-
-    let preview = crate::audio::preview_piper_voice_request(&voice_id);
-    let log = event_log.inner().clone();
-    let gate = playback_gate.inner().clone();
-    let token = gate.begin();
-    crate::monitor::emit_debug_event(
-        &app_handle,
-        &log,
-        "[AUDIO]",
-        format!("TTS preview ({})", preview.voice_id),
-    )
-    .await;
+    let speak = piper_speak.inner().clone();
+    let handle = app_handle.clone();
     tauri::async_runtime::spawn(async move {
-        let client = crate::audio::tts::TtsClient::new(0);
-        match client
-            .speak(
-                &preview.text,
-                &app_handle,
-                &tts_dir,
-                &preview.voice_id,
-                gate,
-                token,
-            )
+        let fetcher = match crate::audio::HttpVoiceFileFetcher::new() {
+            Ok(f) => f,
+            Err(e) => {
+                crate::monitor::emit_debug_event(
+                    &handle,
+                    &crate::monitor::new_event_log(),
+                    "[AUDIO]",
+                    format!("TTS preview fetcher failed: {e}"),
+                )
+                .await;
+                return;
+            }
+        };
+        let progress_handle = handle.clone();
+        match speak
+            .preview(&voice_id, &fetcher, |p| {
+                let _ = progress_handle.emit(
+                    "download_progress",
+                    DownloadProgress {
+                        filename: p.filename,
+                        downloaded: p.downloaded,
+                        total: p.total,
+                        done: p.done,
+                        voice_id: Some(p.voice_id),
+                    },
+                );
+            })
             .await
         {
             Ok(()) => {
-                crate::monitor::emit_debug_event(&app_handle, &log, "[AUDIO]", "TTS preview done")
-                    .await;
+                crate::monitor::emit_debug_event(
+                    &handle,
+                    &crate::monitor::new_event_log(),
+                    "[AUDIO]",
+                    "TTS preview done",
+                )
+                .await;
             }
             Err(e) => {
                 crate::monitor::emit_debug_event(
-                    &app_handle,
-                    &log,
+                    &handle,
+                    &crate::monitor::new_event_log(),
                     "[AUDIO]",
                     format!("TTS preview failed: {e}"),
                 )
@@ -391,32 +382,25 @@ pub async fn preview_voice(
 pub async fn speak_text(
     text: String,
     config: State<'_, SharedConfig>,
-    event_log: State<'_, SharedEventLog>,
-    playback_gate: State<'_, SharedPlaybackGate>,
-    app_handle: tauri::AppHandle,
+    piper_speak: State<'_, SharedPiperSpeak>,
 ) -> CmdResult<()> {
     // Guard against unbounded piper stdin input
     const MAX_TTS_BYTES: usize = 4 * 1024;
     if text.len() > MAX_TTS_BYTES {
-        return Err(format!("text too long for TTS ({} bytes, max {MAX_TTS_BYTES})", text.len()));
+        return Err(format!(
+            "text too long for TTS ({} bytes, max {MAX_TTS_BYTES})",
+            text.len()
+        ));
     }
 
-    let (tts_dir, voice_id) = {
+    let voice_id = {
         let cfg = config.read().await;
-        (cfg.models_dir.join("tts"), cfg.tts_voice_id.clone())
+        cfg.tts_voice_id.clone()
     };
 
-    let log = event_log.inner().clone();
-    let gate = playback_gate.inner().clone();
-    let token = gate.begin();
-    crate::monitor::emit_debug_event(&app_handle, &log, "[AUDIO]",
-        format!("TTS triggered ({} chars)", text.len())).await;
+    let speak = piper_speak.inner().clone();
     tauri::async_runtime::spawn(async move {
-        let client = crate::audio::tts::TtsClient::new(0);
-        match client.speak(&text, &app_handle, &tts_dir, &voice_id, gate, token).await {
-            Ok(()) => { crate::monitor::emit_debug_event(&app_handle, &log, "[AUDIO]", "TTS done").await; }
-            Err(e) => { crate::monitor::emit_debug_event(&app_handle, &log, "[AUDIO]", format!("TTS failed: {e}")).await; }
-        }
+        let _ = speak.speak(&text, &voice_id).await;
     });
     Ok(())
 }
@@ -424,95 +408,51 @@ pub async fn speak_text(
 // ── Voice input ───────────────────────────────────────────────────────────────
 
 /// Start microphone capture and STT loop.
-/// cpal::Stream is !Send on WASAPI so we keep it on a dedicated std::thread.
+/// Capture lifecycle (thread, channel, stop flag) lives in VoiceSession.
 /// Transcripts arrive as `voice_transcript` Tauri events.
 #[tauri::command]
 pub async fn start_voice_input(
-    voice_stop: State<'_, SharedVoiceStop>,
+    voice_session: State<'_, SharedVoiceSession>,
     audio_energy: State<'_, SharedAudioEnergy>,
     stt_engine: State<'_, SharedSttEngine>,
     app_handle: tauri::AppHandle,
 ) -> CmdResult<()> {
-    use std::sync::atomic::{AtomicBool, Ordering};
-
     let stt = stt_engine
         .inner()
         .lock()
         .map_err(|_| "STT engine lock poisoned".to_string())?
         .clone();
 
-    if stt.is_none() {
-        // Soft-fail: keep mic/waveform usable; transcription stays off in the STT loop.
-        crate::monitor::emit_debug_event(
-            &app_handle,
-            &crate::monitor::new_event_log(),
-            "[STT]",
-            "Host STT engine unavailable — starting mic with transcription off. \
-             Open Setup Wizard / Setup repair to restore model + vocab + ONNX Runtime.",
-        )
-        .await;
-    }
-
-    // Stop any existing recording
-    if let Ok(mut g) = voice_stop.inner().lock() {
-        if let Some(flag) = g.take() {
-            flag.store(true, Ordering::Relaxed);
+    // Stop any existing session (remount / restart safe).
+    if let Ok(mut g) = voice_session.inner().lock() {
+        if let Some(mut prev) = g.take() {
+            prev.stop();
         }
     }
 
-    let (tx, rx) = tokio::sync::mpsc::channel::<Vec<f32>>(128);
-    let stop_flag = Arc::new(AtomicBool::new(false));
-    let stop_clone = stop_flag.clone();
+    // Soft-fail diagnostics use [STT]; capture lifecycle uses [AUDIO]
+    // (see DebugEventSessionLog).
+    let log: Arc<dyn crate::audio::SessionLog> =
+        Arc::new(crate::audio::DebugEventSessionLog::new(app_handle.clone()));
 
-    // Channel to get the actual sample rate/channels back from the audio thread
-    let (cfg_tx, cfg_rx) = std::sync::mpsc::channel::<(u32, u16)>();
     let energy_arc = audio_energy.inner().clone();
-    let app_for_thread = app_handle.clone();
+    let (session, started) = crate::audio::VoiceSession::start(
+        Box::new(crate::audio::CpalCaptureBackend),
+        energy_arc,
+        log,
+        stt,
+    )
+    .map_err(|e| format!("failed to start voice session: {e}"))?;
 
-    // audio capture: stays on its own thread (cpal::Stream is !Send on WASAPI)
-    let thread_result = std::thread::Builder::new()
-        .name("audio-capture".into())
-        .spawn(move || {
-            match crate::audio::capture::AudioCapture::start(tx, energy_arc) {
-                Ok(capture) => {
-                    let sr = capture.sample_rate;
-                    let ch = capture.channels;
-                    debug_event_sync(&app_for_thread, format!(
-                        "capture started: {sr} Hz, {ch} ch — device: {}",
-                        capture.device_name
-                    ));
-                    // Send actual device config so STT loop uses the correct sample rate
-                    let _ = cfg_tx.send((sr, ch));
-                    while !stop_clone.load(Ordering::Relaxed) {
-                        std::thread::sleep(std::time::Duration::from_millis(50));
-                    }
-                    debug_event_sync(&app_for_thread, "capture stopped".to_string());
-                }
-                Err(e) => {
-                    debug_event_sync(&app_for_thread, format!("capture failed: {e}"));
-                }
-            }
-        });
-
-    if let Err(e) = thread_result {
-        return Err(format!("failed to spawn audio thread: {e}"));
+    if let Ok(mut g) = voice_session.inner().lock() {
+        *g = Some(session);
     }
-
-    // Store stop flag so stop_voice_input can signal the thread
-    if let Ok(mut g) = voice_stop.inner().lock() {
-        *g = Some(stop_flag);
-    }
-
-    // Wait briefly for the capture thread to report its actual sample rate/channels
-    let (sample_rate, channels) = cfg_rx
-        .recv_timeout(std::time::Duration::from_secs(3))
-        .unwrap_or((16000, 1));
 
     tauri::async_runtime::spawn(crate::audio::run_stt_loop(
-        rx,
-        stt,
-        sample_rate,
-        channels,
+        started.audio_rx,
+        started.stt,
+        started.sample_rate,
+        started.channels,
         app_handle,
     ));
 
@@ -528,17 +468,13 @@ pub fn get_audio_energy(energy: State<'_, SharedAudioEnergy>) -> f32 {
 
 #[tauri::command]
 pub async fn stop_voice_input(
-    voice_stop: State<'_, SharedVoiceStop>,
-    energy: State<'_, SharedAudioEnergy>,
+    voice_session: State<'_, SharedVoiceSession>,
 ) -> CmdResult<()> {
-    use std::sync::atomic::Ordering;
-    if let Ok(mut g) = voice_stop.inner().lock() {
-        if let Some(flag) = g.take() {
-            flag.store(true, Ordering::Relaxed);
+    if let Ok(mut g) = voice_session.inner().lock() {
+        if let Some(mut session) = g.take() {
+            session.stop();
         }
     }
-    // Reset energy to 0 when mic stops
-    energy.store(0u32, Ordering::Relaxed);
     Ok(())
 }
 

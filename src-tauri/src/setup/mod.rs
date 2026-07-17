@@ -10,6 +10,4 @@ pub use prerequisites::{
     evaluate_prerequisites, report_from_live, PrerequisiteCheck, PrerequisiteInputs,
     PrerequisiteReport, PrerequisiteStatus, SystemDeps,
 };
-pub use status::{
-    build_setup_status, check_binaries_in, core_agent_ready, host_stt_ready, SetupProbe,
-};
+pub use status::{build_setup_status, check_binaries_in, derive_setup_status};

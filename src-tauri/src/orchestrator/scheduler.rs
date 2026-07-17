@@ -1,5 +1,5 @@
 use crate::monitor::{DeferredMessage, SchedulerState};
-use chrono::{DateTime, Duration, Utc};
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -162,6 +162,7 @@ pub async fn run_scheduler_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::{DateTime, Duration};
     use uuid::Uuid;
 
     fn temp_queue_path(label: &str) -> PathBuf {

@@ -17,27 +17,30 @@ interface Props {
 type Step = 'tools' | 'models' | 'chat';
 
 function initialStep(status: SetupStatus): Step {
-  // Core agent needs llama; piper is optional (TTS out of Host completion bar).
+  // Gates come from derived SetupStatus (catalog verify + required_for_*).
+  // Piper stays out of the Host completion bar.
   if (!status.binaries.llama_ready) return 'tools';
-  if (!status.embed_model_ready || !status.stt_model_ready) return 'models';
+  if (!status.embed_model_ready || !status.stt_ready) return 'models';
   return 'chat';
 }
 
 export function SetupWizard({ status, repair = false, onComplete, onClose }: Props) {
+  const [live, setLive]           = useState<SetupStatus>(status);
   const [step, setStep]           = useState<Step>(initialStep(status));
-  const [binaries, setBinaries]   = useState<BinariesStatus>(status.binaries);
   const [deps, setDeps]           = useState<SystemDeps | null>(null);
   const [downloading, setDownloading] = useState(false);
   const [progress, setProgress]   = useState<Record<string, DownloadProgress>>({});
   const [error, setError]         = useState<string | null>(null);
-  const [sttReady, setSttReady]   = useState(status.stt_ready);
+
+  const refreshStatus = async () => {
+    const fresh = await invoke<SetupStatus>('get_setup_status');
+    setLive(fresh);
+    return fresh;
+  };
 
   useEffect(() => {
     // Setup repair re-checks prerequisites and artifact readiness on open.
-    invoke<SetupStatus>('get_setup_status').then(s => {
-      setBinaries(s.binaries);
-      setSttReady(s.stt_ready);
-    });
+    refreshStatus().catch(() => {});
     invoke<SystemDeps>('check_system_deps').then(d => setDeps(d)).catch(() => {});
   }, []);
 
@@ -54,9 +57,8 @@ export function SetupWizard({ status, repair = false, onComplete, onClose }: Pro
     setError(null);
     try {
       await invoke('download_required_binaries');
-      const fresh = await invoke<BinariesStatus>('check_binaries_ready');
-      setBinaries(fresh);
-      if (fresh.llama_ready) setStep('models');
+      const fresh = await refreshStatus();
+      if (fresh.binaries.llama_ready) setStep('models');
     } catch (e) {
       setError(String(e));
     } finally {
@@ -69,8 +71,7 @@ export function SetupWizard({ status, repair = false, onComplete, onClose }: Pro
     setError(null);
     try {
       await invoke('download_required_models');
-      const fresh = await invoke<SetupStatus>('get_setup_status');
-      setSttReady(fresh.stt_ready);
+      await refreshStatus();
       setStep('chat');
     } catch (e) {
       setError(String(e));
@@ -96,9 +97,12 @@ export function SetupWizard({ status, repair = false, onComplete, onClose }: Pro
     }
   };
 
+  const binaries = live.binaries;
   // Core tools done when llama is present; piper remains optional in the list.
   const toolsDone = binaries.llama_ready;
-  const modelsDone = status.embed_model_ready && status.stt_model_ready;
+  // Host STT done uses derived stt_ready (encoder + decoder + vocab + ORT).
+  const modelsDone = live.embed_model_ready && live.stt_ready;
+  const sttReady = live.stt_ready;
 
   return (
     <div style={{
@@ -132,7 +136,7 @@ export function SetupWizard({ status, repair = false, onComplete, onClose }: Pro
           <Connector />
           <StepPill n={2} label="models"  active={step === 'models'} done={modelsDone} />
           <Connector />
-          <StepPill n={3} label="chat model" active={step === 'chat'} done={!!status.chat_model} />
+          <StepPill n={3} label="chat model" active={step === 'chat'} done={!!live.chat_model} />
         </div>
 
         <div style={{ padding: '20px 24px' }}>
@@ -149,7 +153,7 @@ export function SetupWizard({ status, repair = false, onComplete, onClose }: Pro
           )}
           {step === 'models' && (
             <ModelsStep
-              status={status}
+              status={live}
               sttReady={sttReady}
               deps={deps}
               onDepsChange={setDeps}
@@ -165,7 +169,7 @@ export function SetupWizard({ status, repair = false, onComplete, onClose }: Pro
               error={error}
               onPick={handlePickModel}
               repair={repair}
-              hasModel={!!status.chat_model}
+              hasModel={!!live.chat_model}
               onClose={onClose}
             />
           )}
@@ -176,7 +180,7 @@ export function SetupWizard({ status, repair = false, onComplete, onClose }: Pro
           color: 'var(--text-muted)', fontSize: 11,
           borderTop: '1px solid var(--border)',
         }}>
-          data stored in: {status.data_dir}
+          data stored in: {live.data_dir}
         </div>
       </div>
     </div>

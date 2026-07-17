@@ -24,10 +24,11 @@ pub type SharedConfig = Arc<RwLock<AppConfig>>;
 pub type SharedOrchestrator = Arc<Mutex<Option<Orchestrator>>>;
 pub type SharedScheduler = Arc<Mutex<ProactivityScheduler>>;
 pub type SharedChatChild = Arc<Mutex<Option<tokio::process::Child>>>;
-/// Stop signal for the voice capture thread. None = not recording.
-pub type SharedVoiceStop = Arc<std::sync::Mutex<Option<Arc<std::sync::atomic::AtomicBool>>>>;
-/// Cancels in-flight Piper playback when a new speak/preview starts.
-pub type SharedPlaybackGate = Arc<audio::PlaybackGate>;
+/// Active VoiceSession. None = not recording.
+pub type SharedVoiceSession = Arc<std::sync::Mutex<Option<audio::VoiceSession>>>;
+/// Cancels in-flight Piper playback when a new speak/preview starts (owned by PiperSpeak).
+pub type SharedPiperSpeak =
+    Arc<audio::PiperSpeak<audio::PiperPlayEngine, audio::DebugEventSpeakLog>>;
 /// PIDs of all spawned sidecar processes — killed on app exit so DLLs are released.
 pub type SharedProcessPids = Arc<std::sync::Mutex<Vec<u32>>>;
 /// Live microphone energy (RMS as f32 bits) — updated by the capture thread, read by UI.
@@ -56,6 +57,7 @@ pub fn run() {
             std::fs::create_dir_all(&cfg.models_dir).ok();
             std::fs::create_dir_all(&cfg.db_path).ok();
 
+            let models_dir = cfg.models_dir.clone();
             let config: SharedConfig = Arc::new(RwLock::new(cfg));
             let orchestrator: SharedOrchestrator = Arc::new(Mutex::new(None));
             // Load persisted deferred queue; overdue items flush when the UI mounts
@@ -69,8 +71,12 @@ pub fn run() {
             ));
             let event_log: SharedEventLog = new_event_log();
             let chat_child: SharedChatChild = Arc::new(Mutex::new(None));
-            let voice_stop: SharedVoiceStop = Arc::new(std::sync::Mutex::new(None));
-            let playback_gate: SharedPlaybackGate = Arc::new(audio::PlaybackGate::new());
+            let voice_session: SharedVoiceSession = Arc::new(std::sync::Mutex::new(None));
+            let piper_speak: SharedPiperSpeak = Arc::new(audio::PiperSpeak::new(
+                models_dir,
+                audio::PiperPlayEngine,
+                audio::DebugEventSpeakLog::new(app_handle.clone()),
+            ));
             let process_pids: SharedProcessPids = Arc::new(std::sync::Mutex::new(Vec::new()));
             let audio_energy: SharedAudioEnergy = Arc::new(std::sync::atomic::AtomicU32::new(0));
             let stt_engine: SharedSttEngine = Arc::new(std::sync::Mutex::new(None));
@@ -80,8 +86,8 @@ pub fn run() {
             app.manage(scheduler.clone());
             app.manage(event_log.clone());
             app.manage(chat_child.clone());
-            app.manage(voice_stop.clone());
-            app.manage(playback_gate.clone());
+            app.manage(voice_session.clone());
+            app.manage(piper_speak.clone());
             app.manage(process_pids.clone());
             app.manage(audio_energy.clone());
             app.manage(stt_engine.clone());
