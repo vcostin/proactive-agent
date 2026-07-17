@@ -13,4 +13,4 @@
 
 ## Notes
 
-Implemented on `feat/proactivity-survives-restarts`: `flush_due_deferred` + `useProactiveEvents` mount flush (invoke return path); scheduler loop skips first tick; seam test covers multi-overdue drain leaving future pending. Hands-on reopen check still recommended before merge to master.
+Implemented on `feat/proactivity-survives-restarts`: `flush_due_deferred` + `useProactiveEvents` mount flush (invoke return path, shared once so Strict Mode remount cannot drop drained items); scheduler loop skips first tick; seam test covers multi-overdue drain leaving future pending. Hands-on reopen check still required before merge to master.
