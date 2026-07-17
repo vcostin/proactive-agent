@@ -38,18 +38,30 @@ function TestDeferButton() {
 interface Props { scheduler: SchedulerState; }
 
 export function SchedulerPanel({ scheduler }: Props) {
-  const [firing, setFiring] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const fireNow = async (id: string) => {
-    setFiring(id);
+    setBusyId(id);
     setError(null);
     try {
       await invoke('fire_deferred_now', { id });
     } catch (e) {
       setError(String(e));
     } finally {
-      setFiring(null);
+      setBusyId(null);
+    }
+  };
+
+  const cancel = async (id: string) => {
+    setBusyId(id);
+    setError(null);
+    try {
+      await invoke('cancel_deferred', { id });
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusyId(null);
     }
   };
 
@@ -65,7 +77,8 @@ export function SchedulerPanel({ scheduler }: Props) {
             key={msg.id}
             msg={msg}
             onFire={fireNow}
-            isFiring={firing === msg.id}
+            onCancel={cancel}
+            isBusy={busyId === msg.id}
           />
         ))
       )}
@@ -81,10 +94,11 @@ export function SchedulerPanel({ scheduler }: Props) {
   );
 }
 
-function PendingRow({ msg, onFire, isFiring }: {
+function PendingRow({ msg, onFire, onCancel, isBusy }: {
   msg: DeferredMessage;
   onFire: (id: string) => void;
-  isFiring: boolean;
+  onCancel: (id: string) => void;
+  isBusy: boolean;
 }) {
   const remaining = Math.max(0, new Date(msg.fire_at).getTime() - Date.now());
   const mins = Math.floor(remaining / 60000);
@@ -104,12 +118,20 @@ function PendingRow({ msg, onFire, isFiring }: {
       </div>
       <button
         onClick={() => onFire(msg.id)}
-        disabled={isFiring}
+        disabled={isBusy}
         className="primary"
         style={{ fontSize: 10, padding: '2px 8px', flexShrink: 0 }}
         title="Fire this message immediately (dev shortcut)"
       >
-        {isFiring ? '…' : 'fire now'}
+        {isBusy ? '…' : 'fire now'}
+      </button>
+      <button
+        onClick={() => onCancel(msg.id)}
+        disabled={isBusy}
+        style={{ fontSize: 10, padding: '2px 8px', flexShrink: 0 }}
+        title="Cancel this deferred message"
+      >
+        cancel
       </button>
     </div>
   );
