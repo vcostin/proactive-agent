@@ -266,6 +266,50 @@ pub async fn download_curated_voice(
     .map_err(|e| format!("download task join: {e}"))?
 }
 
+/// Curated Piper shortlist with installed vs available state for Settings/Voice.
+#[tauri::command]
+pub async fn list_curated_voices(
+    config: State<'_, SharedConfig>,
+) -> CmdResult<Vec<crate::audio::CuratedPiperVoice>> {
+    let tts_dir = {
+        let cfg = config.read().await;
+        cfg.models_dir.join("tts")
+    };
+    Ok(crate::audio::list_curated_piper_voices(&tts_dir))
+}
+
+/// Currently selected Piper voice id (may fall back at speak time if files missing).
+#[tauri::command]
+pub async fn get_tts_voice(config: State<'_, SharedConfig>) -> CmdResult<String> {
+    let cfg = config.read().await;
+    Ok(cfg.tts_voice_id.clone())
+}
+
+/// Persist an installed curated voice as the Voice output selection.
+/// Does not change mute state — mute remains a frontend/speak gate.
+#[tauri::command]
+pub async fn set_tts_voice(
+    voice_id: String,
+    config: State<'_, SharedConfig>,
+    app_handle: tauri::AppHandle,
+) -> CmdResult<()> {
+    let tts_dir = {
+        let cfg = config.read().await;
+        cfg.models_dir.join("tts")
+    };
+    crate::audio::ensure_selectable_piper_voice(&tts_dir, &voice_id)?;
+
+    let mut cfg = config.write().await;
+    cfg.tts_voice_id = voice_id;
+    let config_path = app_handle
+        .path()
+        .app_config_dir()
+        .map_err(|e| format!("config dir: {e}"))?
+        .join("config.json");
+    cfg.save(&config_path).map_err(|e| format!("save config: {e}"))?;
+    Ok(())
+}
+
 // ── Text-to-speech output ─────────────────────────────────────────────────────
 
 /// Speak `text` through the default audio output using Piper TTS.

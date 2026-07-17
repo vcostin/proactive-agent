@@ -5,6 +5,7 @@ import { useChat } from '../../hooks/useChat';
 import { useLlamaReady } from '../../hooks/useLlamaReady';
 import { useProactiveEvents } from '../../hooks/useProactiveEvents';
 import { DeferredMessage } from '../../types';
+import { VoicePicker } from './VoicePicker';
 import { WaveformVisualizer } from './WaveformVisualizer';
 
 interface Props {
@@ -123,6 +124,7 @@ export function ChatWindow({ modelName, onModelClick }: Props) {
         >
           🗑 reset memory
         </button>
+        <VoicePicker />
         <button
           onClick={() => setTtsEnabled(v => !v)}
           style={{

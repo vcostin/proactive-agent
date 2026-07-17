@@ -59,7 +59,7 @@ const CURATED: &[CuratedMeta] = &[
 ];
 
 /// One curated Piper voice as shown to callers (picker, tests, download).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct CuratedPiperVoice {
     pub id: String,
     pub label: String,
@@ -88,6 +88,20 @@ pub fn is_curated_piper_voice_id(id: &str) -> bool {
 /// Hugging Face path stem for a curated id (no extension), if curated.
 pub fn curated_voice_hf_stem(id: &str) -> Option<&'static str> {
     CURATED.iter().find(|m| m.id == id).map(|m| m.hf_stem)
+}
+
+/// Whether a curated voice may be selected (installed onnx+json pair present).
+/// Used by the Settings picker before persisting `tts_voice_id`.
+pub fn ensure_selectable_piper_voice(tts_dir: &Path, voice_id: &str) -> Result<(), String> {
+    if !is_curated_piper_voice_id(voice_id) {
+        return Err(format!("unknown curated piper voice id: {voice_id}"));
+    }
+    if !piper_voice_pair_present(tts_dir, voice_id) {
+        return Err(format!(
+            "piper voice '{voice_id}' is not installed — download it before selecting"
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -207,6 +221,47 @@ mod tests {
         assert!(
             entry(&catalog, "en_US-joe-medium").installed,
             "onnx+json pair should count as installed"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn selectable_when_curated_and_installed() {
+        let root = unique_temp("select-ok");
+        let tts = root.join("tts");
+        write_voice_pair(&tts, "en_US-joe-medium");
+
+        assert!(ensure_selectable_piper_voice(&tts, "en_US-joe-medium").is_ok());
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn not_selectable_when_not_installed() {
+        let root = unique_temp("select-missing");
+        let tts = root.join("tts");
+        fs::create_dir_all(&tts).unwrap();
+
+        let err = ensure_selectable_piper_voice(&tts, "en_US-joe-medium").unwrap_err();
+        assert!(
+            err.contains("not installed"),
+            "expected not-installed error, got: {err}"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn not_selectable_when_unknown_id() {
+        let root = unique_temp("select-unknown");
+        let tts = root.join("tts");
+        fs::create_dir_all(&tts).unwrap();
+
+        let err = ensure_selectable_piper_voice(&tts, "en_US-amy-medium").unwrap_err();
+        assert!(
+            err.contains("unknown curated"),
+            "expected unknown-id error, got: {err}"
         );
 
         let _ = fs::remove_dir_all(&root);

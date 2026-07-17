@@ -10,7 +10,9 @@ pub use capture::{
     frame_rms, pick_input_config, quiet_backend_probe_noise, resolve_input_device,
     resolve_output_device, AudioCapture,
 };
-pub use piper_catalog::{list_curated_piper_voices, CuratedPiperVoice};
+pub use piper_catalog::{
+    ensure_selectable_piper_voice, list_curated_piper_voices, CuratedPiperVoice,
+};
 pub use piper_download::{
     curated_voice_download_urls, download_curated_piper_voice, HttpVoiceFileFetcher,
     VoiceDownloadProgress, VoiceFileFetcher, PIPER_VOICES_HF_V1,
