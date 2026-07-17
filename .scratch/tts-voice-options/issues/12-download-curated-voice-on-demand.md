@@ -13,4 +13,4 @@
 
 ## Comments
 
-Implemented: `download_curated_piper_voice` + `HttpVoiceFileFetcher` in `audio/piper_download.rs`; curated `hf_stem` metadata; Tauri `download_curated_voice` emits `download_progress` and does not mutate `tts_voice_id`. Seam tests cover success, failed json (no orphan onnx), unknown id, and wizard catalog default-only.
+Implemented: `download_curated_piper_voice` + streaming `HttpVoiceFileFetcher` in `audio/piper_download.rs`; curated `hf_stem` metadata; Tauri `download_curated_voice` emits `download_progress` (with `voice_id`) and does not mutate `tts_voice_id`. Seam tests cover success, failed json (no orphan onnx), unknown id, and wizard catalog default-only. Settings picker busy/error chrome is issue 13.
