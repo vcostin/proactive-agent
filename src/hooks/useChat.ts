@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { deliverProactive } from '../chat/deliverProactive';
 import { ChatMessage } from '../types';
 
 const HISTORY_KEY = 'proactive_chat_history';
@@ -99,21 +100,26 @@ export function useChat() {
   }, [isLoading]);
 
   const addProactive = useCallback((content: string) => {
-    const msg: ChatMessage = {
-      id: nextId(), role: 'proactive', content,
-      timestamp: new Date().toISOString(),
-    };
-    setMessages(prev => {
-      const next = [...prev, msg];
-      saveHistory(next);
-      return next;
+    deliverProactive({
+      content,
+      ttsEnabled: ttsEnabledRef.current,
+      append: (text) => {
+        const msg: ChatMessage = {
+          id: nextId(), role: 'proactive', content: text,
+          timestamp: new Date().toISOString(),
+        };
+        setMessages(prev => {
+          const next = [...prev, msg];
+          saveHistory(next);
+          return next;
+        });
+      },
+      speak: (text) =>
+        invoke('speak_text', { text }).catch(e => {
+          console.error('[TTS] proactive speak failed:', e);
+          throw e;
+        }),
     });
-    // Same voice-output gate as chat replies
-    if (ttsEnabledRef.current && content.trim()) {
-      invoke('speak_text', { text: content }).catch(e =>
-        console.error('[TTS] proactive speak failed:', e),
-      );
-    }
   }, []);
 
   const clearHistory = useCallback(() => {

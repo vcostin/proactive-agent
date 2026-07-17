@@ -10,7 +10,12 @@
     "setup:linux": "bash scripts/fetch-sidecars-linux.sh",
     "setup:mac": "bash scripts/fetch-sidecars-macos.sh",
     "setup:windows": "pwsh -File scripts/fetch-sidecars-windows.ps1",
-    "parakeet:linux": "bash scripts/run-parakeet-linux.sh"
+    "parakeet:linux": "bash scripts/run-parakeet-linux.sh",
+    "test:chat": "deno test -A src/chat/"
+  },
+  "compilerOptions": {
+    "lib": ["deno.window", "deno.ns", "dom", "esnext"],
+    "strict": true
   },
   "exclude": [
     "src-tauri/target",

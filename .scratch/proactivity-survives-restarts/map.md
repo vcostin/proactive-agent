@@ -16,7 +16,7 @@ A thin, implementable **spec** for ROADMAP §1 such that handoff is unambiguous:
 
 ## Decisions so far
 
-<!-- empty at chart time -->
+- TTS on proactive: speak iff Voice output is on at delivery; responsibility is frontend `deliverProactive` / `addProactive` (same `speak_text` as replies) — see issues/03, issues/12.
 
 ## Not yet specified
 
