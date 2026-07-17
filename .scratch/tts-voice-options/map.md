@@ -20,7 +20,6 @@ A thin, implementable **spec** for choosing among **curated Piper voices** (down
 
 ## Not yet specified
 
-- Exact curated voice ids / sizes for P0 (graduates after catalog research).
 - Download progress / failure UX while fetching a voice.
 - Whether Setup Wizard should still ship/offer the default voice only, or list curated voices as optional artifacts.
 - How preview shares or serializes with in-flight `speak_text` playback.
