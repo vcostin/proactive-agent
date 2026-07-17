@@ -1,7 +1,8 @@
 # Face / space STT fixtures (quality follow-up)
 
-Raw mic captures for short-word confusions that greedy Parakeet TDT
-often mishandles without decoder phrase boosting.
+Raw mic captures for short isolated words. Diction is fine — the model
+knows `▁face` / `▁Face` in `vocab.txt`. Failures here are preprocessing /
+greedy-decode fragility, not “you mumbled.”
 
 | File | Capture | STT contract (mono @ 16 kHz) |
 |------|---------|------------------------------|
@@ -10,15 +11,25 @@ often mishandles without decoder phrase boosting.
 
 ## Intended text
 
-- `face` → `face` (or `Face.` if the model capitalizes)
-- `space` → `space` (or `Space.`)
+- `face` → `Face.` (or `Face` / `face`)
+- `space` → `Space.`
 
-## Observed baseline (Host STT `ort`, greedy TDT, 2026-07-17)
+## What we measured (Host STT `ort`, greedy TDT, 2026-07-17)
 
-| Clip | Transcript |
-|------|------------|
-| face | *(empty)* |
-| space | `Space.` |
+Same `face_16k.f32` clip:
 
-These are **not** Host cutover gates. They are the failing baseline for the
-decoder biasing / phrase-boost follow-up once that work starts.
+| Input | Transcript |
+|-------|------------|
+| raw (~2.9s, long silence pads, peak ~0.18) | *(empty)* |
+| live path peak-norm to 0.7 | `Face.` |
+| energy-trim speech island only | `Face.` |
+| VAD-only frames (no silence) + peak 0.7 | sometimes `Fez.` |
+
+`space` is more stable on raw (`Space.`), which made the empty `face`
+baseline look like a word-specific blind spot. It was mostly **silence
+padding + level**, not missing vocabulary.
+
+Live path now: **VAD pre-roll/hangover (200 ms)** → louder-channel mono → rubato
+resample → **energy trim (±200 ms)** → peak-norm 0.7 → STT → clean (≥2 letters).
+Decoder phrase boosting remains the longer-term fix for residual short-word
+confusions; see `.scratch/host-stt-ort-cutover/research-sound-conversion.md`.

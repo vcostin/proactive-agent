@@ -2,6 +2,7 @@
 use anyhow::{bail, Context, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{SampleFormat, SampleRate, SupportedStreamConfig};
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -12,6 +13,85 @@ use crate::constants::STT_SAMPLE_RATE;
 /// Low threshold = capture more, rely on STT to ignore noise.
 /// Missing word beginnings is worse than sending a bit of silence.
 const VAD_THRESHOLD: f32 = 0.005;
+/// Pre-roll / hangover around speech so quiet fricative onsets (`/f/`) are kept.
+const VAD_PAD_MS: u32 = 200;
+
+/// Energy VAD with ring-buffer pre-roll and hangover post-roll.
+///
+/// Only frames that pass the gate are returned from [`VadGate::push`]; the
+/// caller forwards them into the STT utterance buffer.
+struct VadGate {
+    threshold: f32,
+    pad_samples: usize,
+    preroll: VecDeque<Vec<f32>>,
+    preroll_samples: usize,
+    hangover_left: usize,
+    in_utterance: bool,
+}
+
+impl VadGate {
+    fn new(sample_rate: u32, channels: usize) -> Self {
+        let pad_samples = (sample_rate as usize)
+            .saturating_mul(VAD_PAD_MS as usize)
+            .saturating_mul(channels.max(1))
+            / 1000;
+        Self {
+            threshold: VAD_THRESHOLD,
+            pad_samples: pad_samples.max(1),
+            preroll: VecDeque::new(),
+            preroll_samples: 0,
+            hangover_left: 0,
+            in_utterance: false,
+        }
+    }
+
+    /// Feed one capture callback. Returns the frames that should be sent to STT
+    /// (possibly empty, possibly including flushed pre-roll).
+    fn push(&mut self, frame: Vec<f32>, rms: f32) -> Vec<Vec<f32>> {
+        let speech = rms > self.threshold;
+        let mut out = Vec::new();
+
+        if speech {
+            if !self.in_utterance {
+                while let Some(pre) = self.preroll.pop_front() {
+                    self.preroll_samples = self.preroll_samples.saturating_sub(pre.len());
+                    out.push(pre);
+                }
+                self.preroll_samples = 0;
+            }
+            self.in_utterance = true;
+            self.hangover_left = self.pad_samples;
+            out.push(frame);
+            return out;
+        }
+
+        if self.hangover_left > 0 {
+            let n = frame.len();
+            out.push(frame);
+            self.hangover_left = self.hangover_left.saturating_sub(n);
+            if self.hangover_left == 0 {
+                self.in_utterance = false;
+            }
+            return out;
+        }
+
+        self.in_utterance = false;
+        self.preroll_samples += frame.len();
+        self.preroll.push_back(frame);
+        while self.preroll_samples > self.pad_samples {
+            if let Some(old) = self.preroll.pop_front() {
+                self.preroll_samples = self.preroll_samples.saturating_sub(old.len());
+            } else {
+                break;
+            }
+        }
+        out
+    }
+
+    fn is_active(&self) -> bool {
+        self.in_utterance || self.hangover_left > 0
+    }
+}
 
 pub struct AudioCapture {
     /// Kept alive — stream stops when this is dropped.
@@ -52,6 +132,7 @@ impl AudioCapture {
         let vad_clone = vad_active.clone();
         let energy_clone = energy_bits.clone();
         let energy_shared = energy_out;
+        let mut gate = VadGate::new(sample_rate, channels_usize);
 
         // We only build an f32 stream — pick_input_config prefers F32.
         if sample_format != SampleFormat::F32 {
@@ -66,12 +147,11 @@ impl AudioCapture {
 
                     energy_clone.store(rms.to_bits(), Ordering::Relaxed);
                     energy_shared.store(rms.to_bits(), Ordering::Relaxed);
-                    let speech = rms > VAD_THRESHOLD;
-                    vad_clone.store(speech, Ordering::Relaxed);
 
-                    if speech {
-                        let _ = audio_tx.try_send(data.to_vec());
+                    for frame in gate.push(data.to_vec(), rms) {
+                        let _ = audio_tx.try_send(frame);
                     }
+                    vad_clone.store(gate.is_active(), Ordering::Relaxed);
                 },
                 |err| eprintln!("[AUDIO] capture error: {err}"),
                 None,
@@ -313,6 +393,54 @@ mod tests {
         let stereo = frame_rms(&data, 2);
         assert!(stereo > left_only);
         assert!((stereo - right).abs() < 1e-6);
+    }
+
+    #[test]
+    fn vad_gate_flushes_preroll_on_speech_onset() {
+        // pad = 200ms @ 1 kHz mono = 200 samples — tiny rate for a short test
+        let mut gate = VadGate::new(1_000, 1);
+        let quiet = vec![0.0f32; 50];
+        let loud = vec![0.2f32; 50];
+
+        assert!(gate.push(quiet.clone(), 0.0).is_empty());
+        assert!(gate.push(quiet.clone(), 0.0).is_empty());
+        assert!(gate.push(quiet.clone(), 0.0).is_empty());
+        assert!(gate.push(quiet, 0.0).is_empty());
+
+        let sent = gate.push(loud.clone(), 0.2);
+        // Pre-roll (~200 samples) + current frame
+        let total: usize = sent.iter().map(|f| f.len()).sum();
+        assert!(
+            total >= 200 + 50,
+            "expected preroll+frame, got {total} samples across {} frames",
+            sent.len()
+        );
+        assert!(gate.is_active());
+    }
+
+    #[test]
+    fn vad_gate_hangover_keeps_trailing_frames() {
+        let mut gate = VadGate::new(1_000, 1);
+        let loud = vec![0.2f32; 50];
+        let quiet = vec![0.0f32; 50];
+
+        let _ = gate.push(loud, 0.2);
+        // Below threshold but hangover still open
+        let sent = gate.push(quiet.clone(), 0.0);
+        assert_eq!(sent.len(), 1);
+        assert!(gate.is_active());
+
+        // Drain hangover (200 samples @ 1kHz → 4×50)
+        let mut n = 0;
+        for _ in 0..10 {
+            let s = gate.push(quiet.clone(), 0.0);
+            n += s.len();
+            if !gate.is_active() {
+                break;
+            }
+        }
+        assert!(n >= 1, "hangover should forward quiet frames");
+        assert!(!gate.is_active());
     }
 
     #[test]

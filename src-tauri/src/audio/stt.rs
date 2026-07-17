@@ -261,6 +261,73 @@ mod tests {
         let _ = STT_SAMPLE_RATE;
     }
 
+    /// Diagnostic: face vs space greedy transcripts (+ gain / trim variants).
+    /// Run: `cargo test -p proactive-agent-lib face_space_diag -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn face_space_diag() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let model_dir = root.join("../binaries/parakeet/models");
+        let ort_dir = root.join("../binaries/ort");
+        let client = SttClient::new(&model_dir, &ort_dir).expect("load Host STT engine");
+        let dir = fixtures_dir().join("face_space");
+
+        for id in ["face", "space"] {
+            let pcm = load_f32_pcm(&dir.join(format!("{id}_16k.f32")));
+            let peak = pcm.iter().copied().map(f32::abs).fold(0.0f32, f32::max);
+            let gain = if peak > 1e-6 { 0.9 / peak } else { 1.0 };
+            let boosted: Vec<f32> = pcm.iter().map(|x| (x * gain).clamp(-1.0, 1.0)).collect();
+            // Match live voice path TARGET_PEAK = 0.7
+            let live_gain = if peak > 0.001 {
+                (0.7 / peak).min(20.0)
+            } else {
+                1.0
+            };
+            let live_amp: Vec<f32> = pcm
+                .iter()
+                .map(|x| (x * live_gain).clamp(-1.0, 1.0))
+                .collect();
+
+            // Trim to first energy island (±0.2s pad)
+            let win = 320; // 20ms @ 16k
+            let energies: Vec<f32> = pcm
+                .chunks(win)
+                .map(|c| (c.iter().map(|x| x * x).sum::<f32>() / c.len() as f32).sqrt())
+                .collect();
+            let thr = energies.iter().copied().fold(0.0f32, f32::max) * 0.15;
+            let active: Vec<usize> = energies
+                .iter()
+                .enumerate()
+                .filter(|(_, e)| **e >= thr)
+                .map(|(i, _)| i)
+                .collect();
+            let trimmed = if let (Some(&a), Some(&b)) = (active.first(), active.last()) {
+                let start = a.saturating_sub(10) * win;
+                let end = ((b + 11) * win).min(pcm.len());
+                pcm[start..end].to_vec()
+            } else {
+                pcm.clone()
+            };
+
+            for (label, audio) in [
+                ("raw", &pcm),
+                ("live0.7", &live_amp),
+                ("peak0.9", &boosted),
+                ("trim", &trimmed),
+            ] {
+                let text = client
+                    .transcribe(audio, STT_SAMPLE_RATE, 1)
+                    .unwrap_or_else(|e| format!("ERR:{e:#}"));
+                eprintln!(
+                    "{id}/{label}: {:>6.2}s peak={:.3} -> {:?}",
+                    audio.len() as f32 / STT_SAMPLE_RATE as f32,
+                    audio.iter().copied().map(f32::abs).fold(0.0f32, f32::max),
+                    text
+                );
+            }
+        }
+    }
+
     #[test]
     fn fixture_hello_world_transcript_parity() {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));

@@ -3,20 +3,25 @@
   "decode": "greedy_tdt",
   "boosting": false,
   "recorded": "2026-07-17",
+  "notes": "Empty face on raw was silence-pad/level; live amplify recovers Face.",
   "clips": [
     {
       "id": "face",
       "pcm": "face_16k.f32",
       "wav": "face.wav",
       "intended": "face",
-      "observed_greedy": ""
+      "observed_greedy_raw": "",
+      "observed_greedy_peak_0_7": "Face.",
+      "observed_greedy_trim": "Face."
     },
     {
       "id": "space",
       "pcm": "space_16k.f32",
       "wav": "space.wav",
       "intended": "space",
-      "observed_greedy": "Space."
+      "observed_greedy_raw": "Space.",
+      "observed_greedy_peak_0_7": "Space.",
+      "observed_greedy_trim": "Space."
     }
   ]
 }
