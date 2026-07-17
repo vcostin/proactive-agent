@@ -9,11 +9,31 @@ use std::path::{Path, PathBuf};
 /// Stable Piper voice id used when nothing else is selected or usable.
 pub use crate::constants::TTS_DEFAULT_VOICE_ID as DEFAULT_PIPER_VOICE_ID;
 
+/// Fixed sample spoken by Voice preview (same copy as the debug TTS button).
+pub const PIPER_VOICE_PREVIEW_SAMPLE: &str =
+    "Hello, I am your proactive assistant. Voice synthesis is working.";
+
 /// Paths Piper needs for one resolved voice.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedPiperVoice {
     pub id: String,
     pub onnx_path: PathBuf,
+}
+
+/// Speak payload for preview — target voice id + fixed sample, never config.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PiperVoicePreviewRequest {
+    pub text: String,
+    pub voice_id: String,
+}
+
+/// Build a preview request for `voice_id` using the product fixed sample.
+/// Does not read or write the persisted selected voice.
+pub fn preview_piper_voice_request(voice_id: &str) -> PiperVoicePreviewRequest {
+    PiperVoicePreviewRequest {
+        text: PIPER_VOICE_PREVIEW_SAMPLE.to_string(),
+        voice_id: voice_id.to_string(),
+    }
 }
 
 /// Resolve `selected_id` under `tts_dir`, falling back to
@@ -73,6 +93,24 @@ mod tests {
         fs::create_dir_all(tts_dir).unwrap();
         fs::write(tts_dir.join(format!("{id}.onnx")), b"onnx").unwrap();
         fs::write(tts_dir.join(format!("{id}.onnx.json")), b"{}").unwrap();
+    }
+
+    #[test]
+    fn preview_request_uses_fixed_sample_and_target_voice() {
+        let req = preview_piper_voice_request("en_US-joe-medium");
+        assert_eq!(
+            req.text,
+            "Hello, I am your proactive assistant. Voice synthesis is working."
+        );
+        assert_eq!(req.voice_id, "en_US-joe-medium");
+    }
+
+    #[test]
+    fn preview_request_does_not_depend_on_default_voice_id() {
+        let req = preview_piper_voice_request("en_GB-cori-medium");
+        assert_ne!(req.voice_id, DEFAULT_PIPER_VOICE_ID);
+        assert_eq!(req.voice_id, "en_GB-cori-medium");
+        assert_eq!(req.text, PIPER_VOICE_PREVIEW_SAMPLE);
     }
 
     #[test]

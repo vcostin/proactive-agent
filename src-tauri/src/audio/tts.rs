@@ -1,7 +1,35 @@
 use anyhow::Result;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
+
+/// Generation counter so a new speak/preview cancels in-flight PCM playback.
+#[derive(Debug, Default)]
+pub struct PlaybackGate {
+    generation: AtomicU64,
+}
+
+/// Token issued by [`PlaybackGate::begin`]. Stale when a newer begin has run.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PlaybackToken(u64);
+
+impl PlaybackGate {
+    pub fn new() -> Self {
+        Self {
+            generation: AtomicU64::new(0),
+        }
+    }
+
+    /// Invalidate any prior token and return the new current generation.
+    pub fn begin(&self) -> PlaybackToken {
+        let gen = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        PlaybackToken(gen)
+    }
+
+    pub fn is_current(&self, token: PlaybackToken) -> bool {
+        self.generation.load(Ordering::SeqCst) == token.0
+    }
+}
 
 /// TTS via Piper — ONNX neural TTS, cross-platform, offline, genuinely good quality.
 /// Text is piped to stdin; Piper writes a WAV file; we play it via cpal.
@@ -16,6 +44,8 @@ impl TtsClient {
         app: &tauri::AppHandle,
         tts_dir: &std::path::Path,
         voice_id: &str,
+        gate: Arc<PlaybackGate>,
+        token: PlaybackToken,
     ) -> Result<()> {
         use crate::monitor::{emit_debug_event, new_event_log};
         // Create a throw-away log since emit_debug_event requires one — events go live via app_handle
@@ -51,7 +81,13 @@ impl TtsClient {
         emit_debug_event(app, &dummy_log, "[AUDIO]", format!(
             "TTS: {} chars → {}", clean.len(), binary.file_name().unwrap_or_default().to_string_lossy()
         )).await;
-        let tmp = std::env::temp_dir().join("proactive_tts.wav");
+        let tmp = std::env::temp_dir().join(format!(
+            "proactive_tts-{}.wav",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
 
         // Piper reads text from stdin, writes WAV to --output_file.
         // Run from piper/ so relative libs (and espeak-ng-data) resolve on all OSes.
@@ -107,9 +143,16 @@ impl TtsClient {
         let wav = tokio::fs::read(&tmp).await?;
         let _ = tokio::fs::remove_file(&tmp).await;
         let (pcm, wav_rate, wav_channels) = wav_to_f32(&wav);
+        if !gate.is_current(token) {
+            emit_debug_event(app, &dummy_log, "[AUDIO]", "TTS: superseded before playback").await;
+            return Ok(());
+        }
+
         emit_debug_event(app, &dummy_log, "[AUDIO]",
             format!("TTS: {} KB @ {}Hz {}ch — playing", wav.len() / 1024, wav_rate, wav_channels)).await;
-        tokio::task::spawn_blocking(move || play_pcm_blocking(&pcm, wav_rate, wav_channels))
+        tokio::task::spawn_blocking(move || {
+            play_pcm_blocking(&pcm, wav_rate, wav_channels, gate, token)
+        })
             .await
             .map_err(|e| anyhow::anyhow!("playback: {e}"))??;
 
@@ -188,6 +231,29 @@ fn resample(samples: &[f32], src_rate: u32, dst_rate: u32) -> Vec<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── PlaybackGate ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn begin_invalidates_prior_token() {
+        let gate = PlaybackGate::new();
+        let first = gate.begin();
+        assert!(gate.is_current(first));
+        let second = gate.begin();
+        assert!(!gate.is_current(first), "first token must be stale after begin");
+        assert!(gate.is_current(second));
+    }
+
+    #[test]
+    fn only_latest_token_is_current_after_multiple_begins() {
+        let gate = PlaybackGate::new();
+        let t1 = gate.begin();
+        let t2 = gate.begin();
+        let t3 = gate.begin();
+        assert!(!gate.is_current(t1));
+        assert!(!gate.is_current(t2));
+        assert!(gate.is_current(t3));
+    }
 
     // ── clean_for_speech ─────────────────────────────────────────────────────
 
@@ -342,8 +408,15 @@ mod tests {
     }
 }
 
-fn play_pcm_blocking(samples: &[f32], src_rate: u32, src_channels: u16) -> Result<()> {
+fn play_pcm_blocking(
+    samples: &[f32],
+    src_rate: u32,
+    src_channels: u16,
+    gate: Arc<PlaybackGate>,
+    token: PlaybackToken,
+) -> Result<()> {
     if samples.is_empty() { return Ok(()); }
+    if !gate.is_current(token) { return Ok(()); }
     let host   = cpal::default_host();
     let device = crate::audio::resolve_output_device(&host)?;
     let config: cpal::StreamConfig = device.default_output_config()?.into();
@@ -365,9 +438,17 @@ fn play_pcm_blocking(samples: &[f32], src_rate: u32, src_channels: u16) -> Resul
     let (tx, rx) = std::sync::mpsc::sync_channel::<()>(1);
     let sc = samples.clone();
     let pc = pos.clone();
+    let gate_cb = gate.clone();
     let stream = device.build_output_stream::<f32, _, _>(
         &config,
         move |out: &mut [f32], _| {
+            if !gate_cb.is_current(token) {
+                for s in out.iter_mut() {
+                    *s = 0.0;
+                }
+                let _ = tx.try_send(());
+                return;
+            }
             let p    = pc.load(Ordering::Relaxed);
             let copy = sc.len().saturating_sub(p).min(out.len());
             out[..copy].copy_from_slice(&sc[p..p + copy]);

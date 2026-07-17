@@ -26,6 +26,8 @@ pub type SharedScheduler = Arc<Mutex<ProactivityScheduler>>;
 pub type SharedChatChild = Arc<Mutex<Option<tokio::process::Child>>>;
 /// Stop signal for the voice capture thread. None = not recording.
 pub type SharedVoiceStop = Arc<std::sync::Mutex<Option<Arc<std::sync::atomic::AtomicBool>>>>;
+/// Cancels in-flight Piper playback when a new speak/preview starts.
+pub type SharedPlaybackGate = Arc<audio::PlaybackGate>;
 /// PIDs of all spawned sidecar processes — killed on app exit so DLLs are released.
 pub type SharedProcessPids = Arc<std::sync::Mutex<Vec<u32>>>;
 /// Live microphone energy (RMS as f32 bits) — updated by the capture thread, read by UI.
@@ -68,6 +70,7 @@ pub fn run() {
             let event_log: SharedEventLog = new_event_log();
             let chat_child: SharedChatChild = Arc::new(Mutex::new(None));
             let voice_stop: SharedVoiceStop = Arc::new(std::sync::Mutex::new(None));
+            let playback_gate: SharedPlaybackGate = Arc::new(audio::PlaybackGate::new());
             let process_pids: SharedProcessPids = Arc::new(std::sync::Mutex::new(Vec::new()));
             let audio_energy: SharedAudioEnergy = Arc::new(std::sync::atomic::AtomicU32::new(0));
             let stt_engine: SharedSttEngine = Arc::new(std::sync::Mutex::new(None));
@@ -78,6 +81,7 @@ pub fn run() {
             app.manage(event_log.clone());
             app.manage(chat_child.clone());
             app.manage(voice_stop.clone());
+            app.manage(playback_gate.clone());
             app.manage(process_pids.clone());
             app.manage(audio_energy.clone());
             app.manage(stt_engine.clone());
@@ -198,6 +202,7 @@ pub fn run() {
             commands::list_curated_voices,
             commands::get_tts_voice,
             commands::set_tts_voice,
+            commands::preview_voice,
             commands::send_message,
             commands::swap_model,
             commands::clear_model,

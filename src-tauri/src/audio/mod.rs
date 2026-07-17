@@ -17,8 +17,13 @@ pub use piper_download::{
     curated_voice_download_urls, download_curated_piper_voice, HttpVoiceFileFetcher,
     VoiceDownloadProgress, VoiceFileFetcher, PIPER_VOICES_HF_V1,
 };
+pub use piper_voice::{
+    piper_voice_pair_present, preview_piper_voice_request, resolve_piper_voice,
+    PiperVoicePreviewRequest, ResolvedPiperVoice, DEFAULT_PIPER_VOICE_ID,
+    PIPER_VOICE_PREVIEW_SAMPLE,
+};
 pub use stt::SttClient;
-pub use tts::TtsClient;
+pub use tts::{PlaybackGate, PlaybackToken, TtsClient};
 
 use anyhow::Result;
 use tauri::Emitter;

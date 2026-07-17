@@ -78,6 +78,22 @@ export function VoicePicker() {
     }
   };
 
+  const handlePreview = async (id: string) => {
+    setError(null);
+    setBusyId(id);
+    setProgress(null);
+    try {
+      await invoke('preview_voice', { voiceId: id });
+      await refresh();
+    } catch (e) {
+      setError(String(e));
+      await refresh().catch(() => {});
+    } finally {
+      setBusyId(null);
+      setProgress(null);
+    }
+  };
+
   const progressPct = progress && progress.total > 0
     ? Math.min(100, Math.round((100 * progress.downloaded) / progress.total))
     : null;
@@ -114,7 +130,7 @@ export function VoicePicker() {
             right: 0,
             marginTop: 6,
             zIndex: 40,
-            width: 280,
+            width: 320,
             maxHeight: 320,
             overflow: 'auto',
             background: 'var(--bg-panel)',
@@ -152,43 +168,63 @@ export function VoicePicker() {
                     {v.label}
                     <span style={{ color: 'var(--text-muted)', marginLeft: 6 }}>{v.locale}</span>
                   </div>
-                  <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>
+                    <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>
                     {v.installed
                       ? (isSelected ? 'Installed · selected' : 'Installed')
                       : (isSelected ? 'Missing files — re-download' : 'Available')}
-                    {isBusy && progressPct != null ? ` · ${progressPct}%` : isBusy ? ' · downloading…' : ''}
+                    {isBusy && progressPct != null
+                      ? ` · ${progressPct}%`
+                      : isBusy
+                        ? (progress ? ' · downloading…' : ' · preview…')
+                        : ''}
                   </div>
                 </div>
-                {v.installed ? (
-                  <button
-                    type="button"
-                    disabled={isSelected || busyId != null}
-                    onClick={() => handleSelect(v.id)}
-                    style={{
-                      fontSize: 11,
-                      padding: '2px 8px',
-                      color: isSelected ? 'var(--success)' : 'var(--text)',
-                      borderColor: isSelected ? 'var(--success)' : 'var(--border)',
-                      opacity: isSelected ? 1 : undefined,
-                    }}
-                  >
-                    {isSelected ? 'Selected' : 'Select'}
-                  </button>
-                ) : (
+                <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
                   <button
                     type="button"
                     disabled={busyId != null}
-                    onClick={() => handleDownload(v.id)}
+                    onClick={() => handlePreview(v.id)}
                     style={{
                       fontSize: 11,
                       padding: '2px 8px',
                       color: isBusy ? 'var(--accent)' : 'var(--text)',
                       borderColor: isBusy ? 'var(--accent)' : 'var(--border)',
                     }}
+                    title="Preview this voice"
                   >
-                    {isBusy ? '…' : 'Download'}
+                    {isBusy ? '…' : 'Preview'}
                   </button>
-                )}
+                  {v.installed ? (
+                    <button
+                      type="button"
+                      disabled={isSelected || busyId != null}
+                      onClick={() => handleSelect(v.id)}
+                      style={{
+                        fontSize: 11,
+                        padding: '2px 8px',
+                        color: isSelected ? 'var(--success)' : 'var(--text)',
+                        borderColor: isSelected ? 'var(--success)' : 'var(--border)',
+                        opacity: isSelected ? 1 : undefined,
+                      }}
+                    >
+                      {isSelected ? 'Selected' : 'Select'}
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      disabled={busyId != null}
+                      onClick={() => handleDownload(v.id)}
+                      style={{
+                        fontSize: 11,
+                        padding: '2px 8px',
+                        color: isBusy ? 'var(--accent)' : 'var(--text)',
+                        borderColor: isBusy ? 'var(--accent)' : 'var(--border)',
+                      }}
+                    >
+                      {isBusy ? '…' : 'Download'}
+                    </button>
+                  )}
+                </div>
               </div>
             );
           })}
