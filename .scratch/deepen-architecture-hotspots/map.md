@@ -18,14 +18,14 @@ One combined **architecture + acceptance** spec covering three deepenings — **
 ## Decisions so far
 
 - SetupStatus and Platform `verify_catalog`/`required_for_*` are parallel today (wizard uses setup only; catalog verify unused by FE) — see [SetupStatus vs Platform verify_catalog — current duplication](issues/02-setup-status-vs-verify-catalog.md).
+- [Piper speak module interface (absorbs preview)](issues/01-piper-speak-interface.md) — Locked in [spec.md](spec.md): speak owns path/gate/resolve; preview = fixed sample + no config mutate; prefer log adapter over AppHandle on core interface.
+- [Platform readiness derivation interface](issues/03-platform-readiness-derivation.md) — Locked in [spec.md](spec.md): SetupStatus derives from verify + `required_for_*`; wizard is presentation adapter; chat model still in Core ready.
+- [VoiceSession capture lifecycle interface](issues/04-voice-session-interface.md) — Locked in [spec.md](spec.md): start/stop + soft-fail; delete unused capture handle; UtterancePipeline out.
+- [Write the combined deepening handoff spec](issues/05-write-combined-handoff-spec.md) — Published [spec.md](spec.md) (`ready-for-agent`).
 
 ## Not yet specified
 
-- Whether speak’s external interface takes `AppHandle` or a small log/event adapter
-- How preview’s ensure-installed step calls today’s download path without inventing Voice inventory
-- Exact `SetupStatus` DTO shape after derivation from `verify_catalog` / `required_for_*`
-- Whether wizard stays a thick React adapter or shrinks once status is catalog-derived
-- Glossary terms to add (if any) when interfaces lock — e.g. names for the deepened speak / VoiceSession modules
+- (none — destination spec published)
 
 ## Out of scope
 
@@ -37,3 +37,5 @@ One combined **architecture + acceptance** spec covering three deepenings — **
 - Implementing any deepening
 - Numbered build tickets inside this map
 - Reopening ADR 0001 expand–contract or Parakeet HTTP sidecar
+
+Status: resolved
