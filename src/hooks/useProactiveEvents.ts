@@ -11,7 +11,10 @@ let flushDuePromise: Promise<DeferredMessage[]> | null = null;
 
 function flushDueOnce(): Promise<DeferredMessage[]> {
   if (!flushDuePromise) {
-    flushDuePromise = invoke<DeferredMessage[]>('flush_due_deferred');
+    flushDuePromise = invoke<DeferredMessage[]>('flush_due_deferred').catch(err => {
+      flushDuePromise = null; // allow a later mount to retry
+      throw err;
+    });
   }
   return flushDuePromise;
 }
