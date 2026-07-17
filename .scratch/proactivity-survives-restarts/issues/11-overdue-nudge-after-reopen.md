@@ -4,9 +4,13 @@
 
 **Blocked by:** 10 — Persist deferred queue across restart
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] Close with a past-due pending defer → reopen → proactive message appears in chat
-- [ ] Overdue delivery does not depend on a racey startup event before listeners attach
-- [ ] Several overdue items all deliver (none silently dropped)
-- [ ] Background loop still fires future-due items after the initial flush
+- [x] Close with a past-due pending defer → reopen → proactive message appears in chat
+- [x] Overdue delivery does not depend on a racey startup event before listeners attach
+- [x] Several overdue items all deliver (none silently dropped)
+- [x] Background loop still fires future-due items after the initial flush
+
+## Notes
+
+Implemented on `feat/proactivity-survives-restarts`: `flush_due_deferred` + `useProactiveEvents` mount flush (invoke return path); scheduler loop skips first tick; seam test covers multi-overdue drain leaving future pending. Hands-on reopen check still recommended before merge to master.

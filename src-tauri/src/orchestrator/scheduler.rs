@@ -253,6 +253,50 @@ mod tests {
     }
 
     #[test]
+    fn drain_due_returns_all_overdue_and_leaves_future() {
+        let path = temp_queue_path("multi-overdue");
+        let first = sample_msg(
+            "First overdue nudge",
+            "a",
+            Utc::now() - Duration::minutes(10),
+        );
+        let second = sample_msg(
+            "Second overdue nudge",
+            "b",
+            Utc::now() - Duration::minutes(1),
+        );
+        let future = sample_msg(
+            "Not due yet",
+            "c",
+            Utc::now() + Duration::minutes(45),
+        );
+
+        {
+            let mut sched = ProactivityScheduler::with_persist(path.clone());
+            sched.add(first.clone());
+            sched.add(second.clone());
+            sched.add(future.clone());
+        }
+
+        // UI-ready flush path: load + drain_due (same as flush_due_deferred).
+        let mut loaded = ProactivityScheduler::load(path.clone()).expect("load");
+        let due = loaded.drain_due();
+        let due_ids: Vec<_> = due.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(due.len(), 2, "all overdue items must deliver");
+        assert!(due_ids.contains(&first.id.as_str()));
+        assert!(due_ids.contains(&second.id.as_str()));
+        assert!(!due_ids.contains(&future.id.as_str()));
+        assert_eq!(loaded.state().pending.len(), 1);
+        assert_eq!(loaded.state().pending[0].id, future.id);
+
+        let reloaded = ProactivityScheduler::load(path.clone()).expect("reload");
+        assert_eq!(reloaded.state().pending.len(), 1);
+        assert_eq!(reloaded.state().pending[0].id, future.id);
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
     fn add_replaces_pending_with_same_message_and_trigger() {
         let mut sched = ProactivityScheduler::new();
         let first = sample_msg("Check in", "task", Utc::now() + Duration::minutes(10));
